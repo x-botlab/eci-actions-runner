@@ -54,6 +54,32 @@ Only capacity failures (`StockExhausted`, quota, throttling) move on to the next
 target. A bad credential, a bad parameter or a missing image stops the walk,
 because it fails in every region and retrying just burns quota.
 
+## How one pass works
+
+```
+read the queue per repo          GitHub is the source of truth for demand
+match jobs against each pool     runs-on is an AND over labels
+read container groups            ECI is the source of truth for inventory
+delete what can never run again  only terminal, stuck-pending or expired states
+create the difference            clamp(queued + warm, min, max), budgeted per pass
+```
+
+Two rules keep this safe:
+
+- **Never launch on partial information.** If a target's describe call fails, the
+  binding is skipped for that pass instead of risking a doubled pool.
+- **Never kill a healthy job.** A container group is only deleted when it cannot
+  run again; the TTL is enforced by the platform through `ActiveDeadlineSeconds`,
+  not by age-based cleanup. Long jobs survive arbitrarily long.
+
+A runner created from a JIT config is not bound to a specific job: it registers
+as ephemeral and takes whichever matching job arrives first. That is what makes a
+`warm` instance possible, and it is also why the launch budget is capped by
+`runner.max_concurrent_launches` rather than by the queue length alone.
+
+Runners that registered but never came online are unregistered again, which is
+what a container group that failed to start leaves behind.
+
 ## Usage
 
 ```console
@@ -61,6 +87,9 @@ $ go build ./cmd/eci-runner
 $ ./eci-runner --config pools.yaml config check
 $ ./eci-runner --config pools.yaml repo ls
 $ ./eci-runner --config pools.yaml pool ls
+$ ./eci-runner --config pools.yaml ps
+$ ./eci-runner --config pools.yaml gc              # dry run
+$ ./eci-runner --config pools.yaml gc --apply      # delete
 $ ./eci-runner --config pools.yaml server --metrics-addr :9090
 ```
 
@@ -87,7 +116,24 @@ the Alibaba Cloud credential comes from the instance RAM role.
 
 ## Status
 
-Scaffold. The loop, CLI, configuration and metrics are wired; `Reconcile`,
-`Launch`, `Describe`, `Terminate` and the GitHub calls still return
-`not implemented`. Subcommands that need live state (`ps`, `gc`, `logs`,
-`drain`) exit with the same marker.
+Working: configuration, repo/pool/target resolution, the reconcile loop, ECI
+launch/describe/delete with zone and region fallback, GitHub installation tokens,
+JIT configs, queue reading, runner cleanup, metrics, and the `config`/`repo`/
+`pool`/`ps`/`gc` verbs.
+
+Still missing: the `workflow_job` webhook fast path (polling already covers
+correctness, only latency is affected), `logs` (needs the log pipeline) and
+`drain` (needs a runtime override that does not require a new commit).
+
+## Before pointing a real repository at it
+
+- Image: the container starts `/home/runner/run.sh` with the JIT config in
+  `ACTIONS_RUNNER_INPUT_JITCONFIG`. Use an image that also passes
+  `--disableupdate` at configure time, or a runner release will try to self update
+  inside every container.
+- Registry: pull from the ACR instance in the same region as the target, and use
+  its VPC endpoint, otherwise image traffic crosses the internet.
+- Network: NAT gateway for egress, no inbound rules, and a fixed egress IP so the
+  dependency mirrors can be allow-listed.
+- Quota: ECI vCPU quota is per region and starts low. Raise it before the first
+  busy week.

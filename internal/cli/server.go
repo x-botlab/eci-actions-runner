@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/x-botlab/eci-actions-runner/internal/config"
-	"github.com/x-botlab/eci-actions-runner/internal/eci"
 	"github.com/x-botlab/eci-actions-runner/internal/github"
 	"github.com/x-botlab/eci-actions-runner/internal/metrics"
 	"github.com/x-botlab/eci-actions-runner/internal/scheduler"
@@ -43,20 +42,9 @@ func newServerCmd(configPath *string) *cobra.Command {
 				return err
 			}
 
-			clouds := make(map[string]eci.Backend, len(cfg.ECI.Targets))
-			for _, target := range cfg.ECI.Targets {
-				client, err := eci.New(eci.Config{
-					Name:            target.Name,
-					RegionID:        target.RegionID,
-					Endpoint:        target.Endpoint,
-					VSwitchIDs:      target.VSwitchIDs,
-					SecurityGroupID: target.SecurityGroupID,
-					RAMRoleName:     target.RAMRoleName,
-				})
-				if err != nil {
-					return err
-				}
-				clouds[target.Name] = client
+			clouds, err := buildClouds(cfg)
+			if err != nil {
+				return err
 			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -66,12 +54,14 @@ func newServerCmd(configPath *string) *cobra.Command {
 			go serveMetrics(ctx, metricsAddr, m.Handler(), logger)
 
 			s := scheduler.New(scheduler.Deps{
-				Forge:    forge,
-				Clouds:   clouds,
-				Bindings: cfg.Bindings(),
-				Interval: time.Duration(cfg.Runner.PollIntervalSeconds) * time.Second,
-				Logger:   logger,
-				Metrics:  m,
+				Forge:          forge,
+				Clouds:         clouds,
+				Bindings:       cfg.Bindings(),
+				Interval:       time.Duration(cfg.Runner.PollIntervalSeconds) * time.Second,
+				Logger:         logger,
+				Metrics:        m,
+				MaxLaunches:    cfg.Runner.MaxConcurrentLaunches,
+				PendingTimeout: time.Duration(cfg.Runner.PendingTimeoutSeconds) * time.Second,
 			})
 			return s.Run(ctx)
 		},
