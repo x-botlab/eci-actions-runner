@@ -48,8 +48,17 @@ func TestLoadRepositoryConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load shipped pools.yaml: %v", err)
 	}
-	if len(cfg.Pools) != 2 {
-		t.Fatalf("got %d pools, want 2", len(cfg.Pools))
+
+	// The shipped file is a template, but it must still be a valid configuration:
+	// CI runs `config check` on it, so a broken example fails the build.
+	names := make([]string, 0, len(cfg.Pools))
+	for _, spec := range cfg.Pools {
+		names = append(names, spec.Name)
+	}
+	for _, want := range []string{"pool-small", "pool-large", "pool-xlarge"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("shipped template is missing pool %q, got %v", want, names)
+		}
 	}
 	if cfg.Runner.PollIntervalSeconds != 30 {
 		t.Fatalf("default poll interval not applied: %d", cfg.Runner.PollIntervalSeconds)
