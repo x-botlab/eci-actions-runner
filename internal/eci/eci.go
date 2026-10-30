@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -444,10 +445,14 @@ func (c *Client) listTagged(ctx context.Context, sel Selector) ([]string, error)
 
 // describeByIDs fetches the detail for one bounded batch of ids.
 func (c *Client) describeByIDs(ctx context.Context, ids []string) ([]Instance, error) {
+	encoded, err := encodeContainerGroupIDs(ids)
+	if err != nil {
+		return nil, fmt.Errorf("eci %s: describe: %w", c.cfg.Name, err)
+	}
 	response, err := withRetry(ctx, "describe container groups", func() (*eciclient.DescribeContainerGroupsResponse, error) {
 		return c.api.DescribeContainerGroups(&eciclient.DescribeContainerGroupsRequest{
 			RegionId:          tea.String(c.cfg.RegionID),
-			ContainerGroupIds: tea.String(strings.Join(ids, ",")),
+			ContainerGroupIds: tea.String(encoded),
 			Limit:             tea.Int32(int32(maxDescribeIDs)),
 		})
 	})
@@ -463,6 +468,20 @@ func (c *Client) describeByIDs(ctx context.Context, ids []string) ([]Instance, e
 		instances = append(instances, toInstance(group, c.cfg.Name))
 	}
 	return instances, nil
+}
+
+// encodeContainerGroupIDs renders the id list the way ECI expects it: a JSON
+// array string. A comma separated list is rejected (InvalidParameter, "JSON
+// string format is required here") as soon as it holds more than one id.
+func encodeContainerGroupIDs(ids []string) (string, error) {
+	if len(ids) == 0 {
+		return "", errors.New("no container group ids")
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return "", fmt.Errorf("encode container group ids: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // Terminate deletes one container group.

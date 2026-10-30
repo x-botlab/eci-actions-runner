@@ -24,6 +24,23 @@ func TestClientTokenIsStableAndShort(t *testing.T) {
 	}
 }
 
+// DescribeContainerGroups takes ContainerGroupIds as a JSON array string. A comma
+// separated list is rejected once it holds two or more ids, which silently stops
+// the whole reconcile loop, so the encoding is pinned here.
+func TestContainerGroupIDEncodingIsJSONArray(t *testing.T) {
+	got, err := encodeContainerGroupIDs([]string{"eci-1", "eci-2"})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if want := `["eci-1","eci-2"]`; got != want {
+		t.Fatalf("encoded ids = %s, want %s", got, want)
+	}
+
+	if _, err := encodeContainerGroupIDs(nil); err == nil {
+		t.Fatal("expected an error for an empty id list")
+	}
+}
+
 func TestTagsSkipEmptyValues(t *testing.T) {
 	tags := tags(Spec{Pool: "pool-short", Repo: "o/r"}, "hangzhou")
 
@@ -231,6 +248,10 @@ func TestLaunchRequestCarriesRegionAndShape(t *testing.T) {
 	}
 	if got := *request.RestartPolicy; got != "Never" {
 		t.Fatalf("RestartPolicy = %q", got)
+	}
+	// Image cache matching keeps the cold start short once the image is cached.
+	if request.AutoMatchImageCache == nil || !*request.AutoMatchImageCache {
+		t.Fatal("AutoMatchImageCache must be true")
 	}
 	if got := *request.ActiveDeadlineSeconds; got != 5400 {
 		t.Fatalf("ActiveDeadlineSeconds = %d", got)
