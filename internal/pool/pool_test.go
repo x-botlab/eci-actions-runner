@@ -1,0 +1,87 @@
+package pool
+
+import "testing"
+
+func TestDesired(t *testing.T) {
+	spec := Spec{Name: "p", Min: 0, Warm: 1, Max: 6}
+
+	tests := []struct {
+		name   string
+		queued int
+		want   int
+	}{
+		{name: "warm covers an empty queue", queued: 0, want: 1},
+		{name: "queued jobs add to warm", queued: 2, want: 3},
+		{name: "capped by max", queued: 50, want: 6},
+		{name: "negative queue is treated as empty", queued: -3, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := spec.Desired(tt.queued); got != tt.want {
+				t.Fatalf("Desired(%d) = %d, want %d", tt.queued, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDesiredRespectsMin(t *testing.T) {
+	spec := Spec{Name: "p", Min: 2, Warm: 0, Max: 6}
+	if got := spec.Desired(0); got != 2 {
+		t.Fatalf("Desired(0) = %d, want 2", got)
+	}
+}
+
+func TestMatches(t *testing.T) {
+	spec := Spec{Name: "p", Labels: []string{"eci-pool-short"}}
+	if !spec.Matches([]string{"self-hosted", "eci-pool-short", "linux"}) {
+		t.Fatal("expected the pool to match a job carrying its label")
+	}
+	if spec.Matches([]string{"self-hosted", "eci-pool-heavy"}) {
+		t.Fatal("expected the pool to reject a job with a different pool label")
+	}
+
+	empty := Spec{Name: "p"}
+	if empty.Matches([]string{"self-hosted"}) {
+		t.Fatal("a pool without labels must not match anything")
+	}
+}
+
+func TestValidate(t *testing.T) {
+	valid := Spec{
+		Name:       "pool-short",
+		VCPU:       4,
+		MemoryGiB:  8,
+		Max:        6,
+		Labels:     []string{"eci-pool-short"},
+		Image:      "registry.example.com/runner:v1",
+		TTLMinutes: 380,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid spec rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Spec)
+	}{
+		{name: "missing name", mutate: func(s *Spec) { s.Name = "" }},
+		{name: "zero vcpu", mutate: func(s *Spec) { s.VCPU = 0 }},
+		{name: "zero memory", mutate: func(s *Spec) { s.MemoryGiB = 0 }},
+		{name: "min above max", mutate: func(s *Spec) { s.Min = 7 }},
+		{name: "warm above max", mutate: func(s *Spec) { s.Warm = 7 }},
+		{name: "no labels", mutate: func(s *Spec) { s.Labels = nil }},
+		{name: "no image", mutate: func(s *Spec) { s.Image = "" }},
+		{name: "no ttl", mutate: func(s *Spec) { s.TTLMinutes = 0 }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec := valid
+			tt.mutate(&spec)
+			if err := spec.Validate(); err == nil {
+				t.Fatal("expected a validation error")
+			}
+		})
+	}
+}

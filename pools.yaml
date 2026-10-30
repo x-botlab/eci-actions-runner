@@ -1,0 +1,55 @@
+# eci-runner configuration.
+#
+# Secrets are not stored here: the App private key is mounted from a secret and
+# the Alibaba Cloud credential comes from the instance RAM role.
+
+github:
+  app_id: 100000
+  installation_id: 10000000
+  private_key_path: /etc/eci-runner/app.pem
+  owner: x-botlab
+  repo: eci-actions-runner
+
+eci:
+  region_id: cn-hangzhou
+  endpoint: eci.cn-hangzhou.aliyuncs.com
+  # More than one switch spreads launches across zones, which matters when a
+  # single zone runs out of stock.
+  vswitch_ids:
+    - vsw-xxxxxxxxxxxxxxxxx
+  security_group_id: sg-xxxxxxxxxxxxxxxxx
+  ram_role_name: eci-runner-self-delete
+
+runner:
+  work_folder: _work
+  poll_interval_seconds: 30
+  max_concurrent_launches: 5
+  pending_timeout_seconds: 180
+
+pools:
+  # Time sensitive jobs: pre-warmed so the ~60s container start is hidden.
+  - name: pool-short
+    vcpu: 4
+    memory_gib: 8
+    min: 0
+    warm: 1
+    max: 6
+    labels:
+      - eci-pool-short
+    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:v1
+    ttl_minutes: 380
+    spot: false
+
+  # Docker builds and long jobs: created on demand, never pre-warmed, because a
+  # 60s start is noise next to a 30 minute build.
+  - name: pool-heavy
+    vcpu: 8
+    memory_gib: 16
+    min: 0
+    warm: 0
+    max: 4
+    labels:
+      - eci-pool-heavy
+    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner-heavy:v1
+    ttl_minutes: 400
+    spot: false

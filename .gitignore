@@ -1,0 +1,19 @@
+bin/
+dist/
+
+# Never commit the App private key or local credential overrides.
+*.pem
+*.key
+.env
+.env.*
+
+# Build and test output
+*.exe
+*.test
+*.out
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
