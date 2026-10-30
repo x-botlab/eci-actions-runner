@@ -85,38 +85,71 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # The runner bundle is self-contained: bin/ holds the listener and its .NET
 # runtime, externals/ the node builds that actions execute with.
-RUN --mount=type=cache,target=/tmp/runner-download \
+#
+# Every download lands in the shared /tmp/dl cache and only moves into place once
+# curl finished, so a flaky link costs one retry instead of a full re-download and
+# a truncated tarball can never be mistaken for a cached one.
+RUN --mount=type=cache,target=/tmp/dl \
     set -eux; \
     tarball="actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz"; \
-    if [ ! -f "/tmp/runner-download/${tarball}" ]; then \
-        curl -fsSL "${RUNNER_BASE_URL}/v${RUNNER_VERSION}/${tarball}" \
-            -o "/tmp/runner-download/${tarball}"; \
+    if [ ! -f "/tmp/dl/${tarball}" ]; then \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "${RUNNER_BASE_URL}/v${RUNNER_VERSION}/${tarball}" -o "/tmp/dl/${tarball}.part"; \
+        mv "/tmp/dl/${tarball}.part" "/tmp/dl/${tarball}"; \
     fi; \
-    tar -xzf "/tmp/runner-download/${tarball}" -C /home/runner; \
+    tar -xzf "/tmp/dl/${tarball}" -C /home/runner; \
     chown -R runner:runner /home/runner; \
     su runner -c '/home/runner/bin/Runner.Listener --version'
 
 # Node from the official tarball: the distribution package lags, and the actions
 # a job downloads at runtime need a recent node.
-RUN set -eux; \
-    mkdir -p /usr/local/lib/nodejs; \
-    curl -fsSL "${NODE_BASE_URL}/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
-        | tar -xJ -C /usr/local/lib/nodejs; \
-    for bin in node npm npx corepack; do \
-        ln -sf "/usr/local/lib/nodejs/node-v${NODE_VERSION}-linux-x64/bin/${bin}" "/usr/local/bin/${bin}"; \
-    done; \
-    node --version; npm --version
+#
+# Node lives in its own prefix with no symlink farm in /usr/local/bin. Corepack
+# `enable` writes its pnpm/yarn shims next to the corepack binary it is invoked
+# through, and a job runs as `runner`, so that directory has to belong to the
+# runner group: with the symlinks in root-owned /usr/local/bin, `corepack enable`
+# fails the job with EACCES before any step runs.
+RUN --mount=type=cache,target=/tmp/dl \
+    set -eux; \
+    mkdir -p /opt/node; \
+    tarball="node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    if [ ! -f "/tmp/dl/${tarball}" ]; then \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "${NODE_BASE_URL}/v${NODE_VERSION}/${tarball}" -o "/tmp/dl/${tarball}.part"; \
+        mv "/tmp/dl/${tarball}.part" "/tmp/dl/${tarball}"; \
+    fi; \
+    tar -xJf "/tmp/dl/${tarball}" -C /opt/node --strip-components=1; \
+    export PATH=/opt/node/bin:$PATH; \
+    corepack enable; \
+    chown -R root:runner /opt/node; \
+    chmod -R g+w /opt/node/bin /opt/node/lib/node_modules; \
+    chmod g+s /opt/node/bin; \
+    node --version; npm --version; corepack --version
 
-RUN set -eux; \
-    curl -fsSL "${GO_BASE_URL}/go${GO_VERSION}.linux-amd64.tar.gz" | tar -xz -C /usr/local; \
+RUN --mount=type=cache,target=/tmp/dl \
+    set -eux; \
+    tarball="go${GO_VERSION}.linux-amd64.tar.gz"; \
+    if [ ! -f "/tmp/dl/${tarball}" ]; then \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "${GO_BASE_URL}/${tarball}" -o "/tmp/dl/${tarball}.part"; \
+        mv "/tmp/dl/${tarball}.part" "/tmp/dl/${tarball}"; \
+    fi; \
+    tar -xzf "/tmp/dl/${tarball}" -C /usr/local; \
     /usr/local/go/bin/go version
 
 # Docker CLI and buildx only: the daemon belongs in a sidecar, not in the runner.
-RUN set -eux; \
-    curl -fsSL "${DOCKER_BASE_URL}/docker-${DOCKER_VERSION}.tgz" \
-        | tar -xz -C /usr/local/bin --strip-components=1 docker/docker; \
+RUN --mount=type=cache,target=/tmp/dl \
+    set -eux; \
+    tarball="docker-${DOCKER_VERSION}.tgz"; \
+    if [ ! -f "/tmp/dl/${tarball}" ]; then \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "${DOCKER_BASE_URL}/${tarball}" -o "/tmp/dl/${tarball}.part"; \
+        mv "/tmp/dl/${tarball}.part" "/tmp/dl/${tarball}"; \
+    fi; \
+    tar -xzf "/tmp/dl/${tarball}" -C /usr/local/bin --strip-components=1 docker/docker; \
     mkdir -p /usr/local/lib/docker/cli-plugins; \
-    curl -fsSL "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" \
+    curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+        "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" \
         -o /usr/local/lib/docker/cli-plugins/docker-buildx; \
     chmod 0755 /usr/local/lib/docker/cli-plugins/docker-buildx; \
     install -d -o runner -g runner /home/runner/go; \
@@ -126,8 +159,9 @@ RUN set -eux; \
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     GOPATH=/home/runner/go \
-    PATH=/usr/local/go/bin:/home/runner/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    PATH=/opt/node/bin:/usr/local/go/bin:/home/runner/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     GIT_TERMINAL_PROMPT=0 \
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
     PIP_NO_CACHE_DIR=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     NPM_CONFIG_FUND=false \

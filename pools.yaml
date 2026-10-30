@@ -83,7 +83,7 @@ pools:
     warm: 0
     max: 8
     labels: [eci-pool-small]
-    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2
+    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2-r2
     ttl_minutes: 380
     spot: true
 
@@ -95,7 +95,7 @@ pools:
     warm: 0
     max: 8
     labels: [eci-pool-large]
-    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2
+    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2-r2
     ttl_minutes: 380
     spot: true
 
@@ -107,6 +107,6 @@ pools:
     warm: 0
     max: 8
     labels: [eci-pool-xlarge]
-    image: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner:2.338.2
+    image: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner:2.338.2-r2
     ttl_minutes: 380
     spot: true

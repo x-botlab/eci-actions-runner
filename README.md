@@ -268,7 +268,7 @@ correctness, only latency is affected), `logs` (needs the log pipeline) and
 [image/](image/) builds and publishes the container a job runs in:
 
 ```
-registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2
+registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2-r2
 ```
 
 `make image-push` builds and pushes it. The runner version is pinned and must be
