@@ -58,7 +58,7 @@ func newPoolCmd(configPath *string) *cobra.Command {
 			fmt.Fprintln(w, "POOL\tECI\tVCPU\tMEM(GiB)\tMIN\tWARM\tMAX\tTTL(m)\tSPOT\tLABELS")
 			for _, p := range cfg.Pools {
 				fmt.Fprintf(w, "%s\t%s\t%g\t%g\t%d\t%d\t%d\t%d\t%t\t%s\n",
-					p.Name, p.ECI, p.VCPU, p.MemoryGiB, p.Min, p.Warm, p.Max, p.TTLMinutes, p.Spot,
+					p.Name, strings.Join(p.ECI, ">"), p.VCPU, p.MemoryGiB, p.Min, p.Warm, p.Max, p.TTLMinutes, p.Spot,
 					strings.Join(p.Labels, ","))
 			}
 			return w.Flush()
@@ -83,7 +83,7 @@ func newRepoCmd(configPath *string) *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "REPO\tINSTALLATION\tPOOLS\tTARGETS")
+			fmt.Fprintln(w, "REPO\tINSTALLATION\tBINDINGS")
 
 			byRepo := make(map[string][]config.Binding)
 			for _, b := range cfg.Bindings() {
@@ -92,14 +92,15 @@ func newRepoCmd(configPath *string) *cobra.Command {
 			}
 			for _, inst := range cfg.GitHub.Installations {
 				for _, repo := range inst.Repos {
-					var pools, targets []string
+					var bindings []string
 					for _, b := range byRepo[repo.FullName()] {
-						pools = append(pools, b.Pool.Name)
-						targets = append(targets, b.Target.Name)
+						names := make([]string, 0, len(b.Targets))
+						for _, t := range b.Targets {
+							names = append(names, t.Name)
+						}
+						bindings = append(bindings, fmt.Sprintf("%s(%s)", b.Pool.Name, strings.Join(names, ">")))
 					}
-					fmt.Fprintf(w, "%s\t%d\t%s\t%s\n",
-						repo.FullName(), inst.ID,
-						strings.Join(pools, ","), strings.Join(targets, ","))
+					fmt.Fprintf(w, "%s\t%d\t%s\n", repo.FullName(), inst.ID, strings.Join(bindings, ","))
 				}
 			}
 			return w.Flush()

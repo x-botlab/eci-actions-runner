@@ -6,7 +6,60 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
+
+// Targets is the ordered list of ECI targets a pool may use. The first target
+// that has capacity takes the instance and the rest are fallbacks, so a stock
+// out in one zone does not fail the job.
+type Targets []string
+
+// UnmarshalYAML accepts both `eci: hangzhou` and `eci: [hangzhou, beijing]`.
+func (t *Targets) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		var name string
+		if err := value.Decode(&name); err != nil {
+			return err
+		}
+		*t = Targets{name}
+	case yaml.SequenceNode:
+		var names []string
+		if err := value.Decode(&names); err != nil {
+			return err
+		}
+		*t = names
+	default:
+		return fmt.Errorf("line %d: eci must be a target name or a list of target names", value.Line)
+	}
+	return nil
+}
+
+// Primary returns the preferred target, or "" when none is set.
+func (t Targets) Primary() string {
+	if len(t) == 0 {
+		return ""
+	}
+	return t[0]
+}
+
+func (t Targets) validate() error {
+	if len(t) == 0 {
+		return fmt.Errorf("at least one eci target is required")
+	}
+	seen := make(map[string]struct{}, len(t))
+	for _, name := range t {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("eci targets must not be empty")
+		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("eci target %q is listed twice", name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
 
 // Spec is one runner pool as declared in the configuration file. A pool maps a
 // set of runner labels onto a single ECI shape (vCPU/memory/image).
@@ -18,11 +71,23 @@ type Spec struct {
 	Warm      int      `yaml:"warm" json:"warm"`
 	Max       int      `yaml:"max" json:"max"`
 	Labels    []string `yaml:"labels" json:"labels"`
-	// ECI names the target this pool creates container groups in.
-	ECI        string `yaml:"eci" json:"eci"`
-	Image      string `yaml:"image" json:"image"`
-	TTLMinutes int    `yaml:"ttl_minutes" json:"ttl_minutes"`
-	Spot       bool   `yaml:"spot" json:"spot"`
+	// ECI lists the targets this pool may use, in preference order.
+	ECI Targets `yaml:"eci" json:"eci"`
+	// Image is the fallback image, used for any target without an override.
+	Image string `yaml:"image" json:"image"`
+	// Images overrides Image per target. A container registry endpoint is
+	// regional, so pulling a cross-region image is slow and billable.
+	Images     map[string]string `yaml:"images" json:"images"`
+	TTLMinutes int               `yaml:"ttl_minutes" json:"ttl_minutes"`
+	Spot       bool              `yaml:"spot" json:"spot"`
+}
+
+// ImageFor returns the image to pull in target, falling back to Image.
+func (s Spec) ImageFor(target string) string {
+	if image, ok := s.Images[target]; ok {
+		return image
+	}
+	return s.Image
 }
 
 // Desired returns how many instances the pool should hold for a queue depth.
@@ -64,12 +129,20 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("pool %q: warm (%d) exceeds max (%d)", s.Name, s.Warm, s.Max)
 	case len(s.Labels) == 0:
 		return fmt.Errorf("pool %q: at least one label is required", s.Name)
-	case strings.TrimSpace(s.ECI) == "":
-		return fmt.Errorf("pool %q: eci target is required", s.Name)
+	}
+	if err := s.ECI.validate(); err != nil {
+		return fmt.Errorf("pool %q: %w", s.Name, err)
+	}
+	switch {
 	case strings.TrimSpace(s.Image) == "":
 		return fmt.Errorf("pool %q: image is required", s.Name)
 	case s.TTLMinutes <= 0:
 		return fmt.Errorf("pool %q: ttl_minutes must be greater than 0", s.Name)
+	}
+	for target, image := range s.Images {
+		if strings.TrimSpace(target) == "" || strings.TrimSpace(image) == "" {
+			return fmt.Errorf("pool %q: every images entry needs a target and an image", s.Name)
+		}
 	}
 	return nil
 }

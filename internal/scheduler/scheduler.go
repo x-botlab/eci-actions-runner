@@ -6,6 +6,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -78,4 +79,47 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // Reconcile performs one convergence pass.
 func (s *Scheduler) Reconcile(ctx context.Context) error {
 	return errNotImplemented
+}
+
+// launch walks a binding's targets in preference order and returns the instance
+// id together with the target that accepted it. A stock out or a throttle in one
+// zone moves on to the next target; anything else stops the walk, because a bad
+// credential or a missing image fails in every region.
+func (s *Scheduler) launch(ctx context.Context, binding config.Binding, spec eci.Spec) (instanceID, target string, err error) {
+	if spec.Pool == "" {
+		spec.Pool = binding.Pool.Name
+	}
+	if spec.Repo == "" {
+		spec.Repo = binding.Repo.String()
+	}
+
+	var lastErr error
+	for _, candidate := range binding.Targets {
+		backend, ok := s.deps.Clouds[candidate.Name]
+		if !ok {
+			lastErr = fmt.Errorf("eci target %q has no backend", candidate.Name)
+			continue
+		}
+
+		spec.Image = binding.Pool.ImageFor(candidate.Name)
+		id, launchErr := backend.Launch(ctx, spec)
+		if launchErr == nil {
+			return id, candidate.Name, nil
+		}
+
+		s.deps.Metrics.CreateFailures.
+			WithLabelValues(spec.Repo, spec.Pool, eci.FailureReason(launchErr)).Inc()
+		if !eci.IsCapacityError(launchErr) {
+			return "", "", fmt.Errorf("target %s: %w", candidate.Name, launchErr)
+		}
+
+		s.deps.Logger.Warn("no capacity in target, trying the next one",
+			"repo", spec.Repo, "pool", spec.Pool, "target", candidate.Name, "err", launchErr)
+		lastErr = launchErr
+	}
+
+	if lastErr == nil {
+		lastErr = errors.New("pool lists no eci targets")
+	}
+	return "", "", fmt.Errorf("pool %s: no target accepted the instance: %w", spec.Pool, lastErr)
 }

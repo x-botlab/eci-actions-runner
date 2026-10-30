@@ -37,8 +37,10 @@ Three collections, each a first-class entity:
   installation.
 - **eci.targets**: one target is one region with its own switches, security group
   and instance role.
-- **pools**: a pool names exactly one target, so the same label can serve two
-  regions only through two pools.
+- **pools**: a pool lists one or more targets **in preference order**
+  (`eci: [hangzhou, beijing]`), so a stock out or a throttle in the first zone
+  falls through to the next one. `images` overrides the image per target,
+  because a container registry endpoint is regional.
 
 The scheduler then works on **bindings**, one per `(repo, pool)` pair — that unit
 matters because a repository scoped runner can only serve its own repository. A
@@ -47,6 +49,10 @@ misses a pool that already exists.
 
 Labels must be unique among the pools a repo binds, and no stricter: two repos
 may reuse `eci-pool-short` for different shapes, since their runners never mix.
+
+Only capacity failures (`StockExhausted`, quota, throttling) move on to the next
+target. A bad credential, a bad parameter or a missing image stops the walk,
+because it fails in every region and retrying just burns quota.
 
 ## Usage
 

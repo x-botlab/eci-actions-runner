@@ -49,12 +49,15 @@ type Spec struct {
 
 // Instance is a container group as reported by DescribeContainerGroups.
 type Instance struct {
-	ID        string
-	Name      string
-	Status    string
-	Pool      string
-	Repo      string
-	JobID     string
+	ID     string
+	Name   string
+	Status string
+	Pool   string
+	Repo   string
+	JobID  string
+	// Target is the ECI target the instance lives in, needed because a delete
+	// has to go to the same regional endpoint that created it.
+	Target    string
 	CreatedAt time.Time
 }
 
@@ -70,6 +73,43 @@ type Backend interface {
 	Launch(ctx context.Context, spec Spec) (string, error)
 	Describe(ctx context.Context, sel Selector) ([]Instance, error)
 	Terminate(ctx context.Context, id string) error
+}
+
+// Failure reasons, also used as metric labels.
+const (
+	ReasonStock = "stock"
+	ReasonQuota = "quota"
+	ReasonOther = "other"
+)
+
+// capacityCodes maps ECI error codes onto a failure reason. Anything not listed
+// is fatal for the whole pool: another region cannot fix a bad credential, a bad
+// parameter or a missing image.
+var capacityCodes = map[string]string{
+	"StockExhausted":           ReasonStock,
+	"InvalidOperation.NoStock": ReasonStock,
+	"QuotaExceeded":            ReasonQuota,
+	"Throttling":               ReasonQuota,
+	"Throttling.User":          ReasonQuota,
+	"Throttling.Api":           ReasonQuota,
+	"ServiceUnavailable":       ReasonQuota,
+}
+
+// FailureReason buckets err for metrics.
+func FailureReason(err error) string {
+	var sdkErr *tea.SDKError
+	if errors.As(err, &sdkErr) && sdkErr.Code != nil {
+		if reason, ok := capacityCodes[*sdkErr.Code]; ok {
+			return reason
+		}
+	}
+	return ReasonOther
+}
+
+// IsCapacityError reports whether another target could still accept the
+// instance: the zone is out of stock, or the call was throttled.
+func IsCapacityError(err error) bool {
+	return FailureReason(err) != ReasonOther
 }
 
 // Client talks to the ECI OpenAPI.
@@ -118,6 +158,9 @@ func New(cfg Config) (*Client, error) {
 
 	return &Client{api: api, cfg: cfg}, nil
 }
+
+// Target returns the name of the ECI target this client talks to.
+func (c *Client) Target() string { return c.cfg.Name }
 
 // Launch creates one container group and returns its id.
 func (c *Client) Launch(ctx context.Context, spec Spec) (string, error) {

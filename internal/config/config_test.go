@@ -171,11 +171,11 @@ func TestBindings(t *testing.T) {
 		if b.Repo.InstallationID == 0 {
 			t.Fatalf("%s: binding without an installation id", key)
 		}
-		if b.Target.Name != b.Pool.ECI {
-			t.Fatalf("%s/%s: target %q does not match the pool's eci %q",
-				key, b.Pool.Name, b.Target.Name, b.Pool.ECI)
+		if b.Targets[0].Name != b.Pool.ECI.Primary() {
+			t.Fatalf("%s/%s: preferred target %q does not match the pool's first eci entry %q",
+				key, b.Pool.Name, b.Targets[0].Name, b.Pool.ECI.Primary())
 		}
-		got[key] = append(got[key], b.Pool.Name+"@"+b.Target.Name)
+		got[key] = append(got[key], b.Pool.Name+"@"+b.Targets[0].Name)
 	}
 
 	want := map[string][]string{

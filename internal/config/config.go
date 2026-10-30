@@ -66,12 +66,12 @@ type Target struct {
 	RAMRoleName     string   `yaml:"ram_role_name"`
 }
 
-// Binding is one schedulable unit: a repository, the pool serving it and the ECI
-// target that pool lands in.
+// Binding is one schedulable unit: a repository, the pool serving it and the
+// ECI targets that pool may use, in preference order.
 type Binding struct {
-	Repo   github.Repo
-	Pool   pool.Spec
-	Target Target
+	Repo    github.Repo
+	Pool    pool.Spec
+	Targets []Target
 }
 
 // Runner holds scheduler behaviour that is shared by every pool.
@@ -148,8 +148,15 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("pool name %q is declared twice", p.Name)
 		}
 		seenNames[p.Name] = struct{}{}
-		if _, ok := targets[p.ECI]; !ok {
-			return fmt.Errorf("pool %q: unknown eci target %q", p.Name, p.ECI)
+		for _, name := range p.ECI {
+			if _, ok := targets[name]; !ok {
+				return fmt.Errorf("pool %q: unknown eci target %q", p.Name, name)
+			}
+		}
+		for name := range p.Images {
+			if _, ok := targets[name]; !ok {
+				return fmt.Errorf("pool %q: images refers to unknown eci target %q", p.Name, name)
+			}
 		}
 	}
 
@@ -275,8 +282,13 @@ func (c *Config) Bindings() []Binding {
 				InstallationID: inst.ID,
 			}
 			for _, spec := range c.poolsFor(repo) {
-				target, _ := c.Target(spec.ECI)
-				bindings = append(bindings, Binding{Repo: ref, Pool: spec, Target: target})
+				targets := make([]Target, 0, len(spec.ECI))
+				for _, name := range spec.ECI {
+					if target, ok := c.Target(name); ok {
+						targets = append(targets, target)
+					}
+				}
+				bindings = append(bindings, Binding{Repo: ref, Pool: spec, Targets: targets})
 			}
 		}
 	}

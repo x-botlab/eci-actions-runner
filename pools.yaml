@@ -56,7 +56,14 @@ runner:
 pools:
   # Time sensitive jobs: pre-warmed so the ~60s container start is hidden.
   - name: pool-short
-    eci: hangzhou
+    # Ordered: beijing is the fallback when hangzhou is out of stock.
+    eci: [hangzhou, beijing]
+    # A container registry endpoint is regional, so each target pulls from its
+    # own ACR instance instead of crossing regions.
+    images:
+      hangzhou: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:v1
+      beijing: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner:v1
+    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:v1
     vcpu: 4
     memory_gib: 8
     min: 0
@@ -64,7 +71,6 @@ pools:
     max: 6
     labels:
       - eci-pool-short
-    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:v1
     ttl_minutes: 380
     spot: false
 
