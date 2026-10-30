@@ -20,15 +20,12 @@ github:
         # never silently misses a pool that already exists.
         - owner: x-botlab
           name: eci-actions-runner
-          pools: [pool-short, pool-heavy]
         - owner: x-botlab
           name: another-service
-          pools: [pool-short]
     - id: 10000001
       repos:
         - owner: x-botlab-org2
           name: service-b
-          pools: [pool-short]
 
 eci:
   # Credentials for private images. The values themselves live in the
