@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   smoke:
-    runs-on: [self-hosted, eci-pool-short]
+    runs-on: [self-hosted, eci-pool-small]
     timeout-minutes: 15
     steps:
       - name: Identity
