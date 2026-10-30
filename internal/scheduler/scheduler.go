@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/x-botlab/eci-actions-runner/internal/config"
@@ -49,6 +50,10 @@ type Deps struct {
 type Scheduler struct {
 	deps Deps
 	kick chan struct{}
+
+	// ready flips once a pass has completed cleanly, which is what a readiness
+	// probe should mean: the loop has talked to both GitHub and ECI at least once.
+	ready atomic.Bool
 
 	// inFlight remembers launches that the platform does not list yet. Tag based
 	// discovery is eventually consistent, so without this two passes a second
@@ -174,8 +179,14 @@ func (s *Scheduler) Run(ctx context.Context) error {
 func (s *Scheduler) reconcileOnce(ctx context.Context) {
 	if err := s.Reconcile(ctx); err != nil {
 		s.deps.Logger.Error("reconcile failed", "err", err)
+		return
 	}
+	s.ready.Store(true)
 }
+
+// Ready reports whether a reconcile pass has ever completed. A readiness probe
+// uses it so traffic (and a rollout) waits until both APIs have answered once.
+func (s *Scheduler) Ready() bool { return s.ready.Load() }
 
 // Reconcile performs one convergence pass: it reads the queue and the observed
 // container groups, deletes what can never run again, and creates the difference.

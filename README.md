@@ -207,6 +207,13 @@ The flip side is that `runs-on` is an AND: a job asking for a label no runner
 carries stays queued rather than failing, so watch `eci_runner_queued_jobs`
 rather than the job page.
 
+## Probes
+
+`--metrics-addr` also serves `/healthz` and `/readyz`. Readiness means a reconcile
+pass has completed, so a rollout waits until GitHub and ECI have both answered once.
+The probes live on the metrics port on purpose: the webhook port is the only one
+that has to be reachable from the internet.
+
 ## The webhook fast path
 
 Polling is correct on its own, but it costs up to one poll interval of latency.

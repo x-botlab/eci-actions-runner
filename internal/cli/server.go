@@ -55,8 +55,6 @@ func newServerCmd(configPath *string) *cobra.Command {
 			defer stop()
 
 			m := metrics.New()
-			go serveHTTP(ctx, "metrics", metricsAddr, m.Handler(), logger)
-
 			s := scheduler.New(scheduler.Deps{
 				Forge:          forge,
 				Clouds:         clouds,
@@ -67,6 +65,8 @@ func newServerCmd(configPath *string) *cobra.Command {
 				MaxLaunches:    cfg.Runner.MaxConcurrentLaunches,
 				PendingTimeout: time.Duration(cfg.Runner.PendingTimeoutSeconds) * time.Second,
 			})
+
+			go serveHTTP(ctx, "metrics", metricsAddr, metricsHandler(m, s), logger)
 
 			if webhookAddr != "" {
 				handler, err := buildWebhook(cfg, s.Kick, logger)
@@ -113,6 +113,27 @@ func buildWebhook(cfg *config.Config, kick func(), logger *slog.Logger) (http.Ha
 	}
 	logger.Info("webhook endpoint enabled", "repos", len(repos), "secret_env", envName)
 	return handler, nil
+}
+
+// metricsHandler serves /metrics together with the probes Kubernetes needs. The
+// probes live here rather than on the webhook listener so the webhook port can be
+// the only one exposed to the internet.
+func metricsHandler(m *metrics.Metrics, s *scheduler.Scheduler) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", m.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !s.Ready() {
+			http.Error(w, "no reconcile has completed yet", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ready\n"))
+	})
+	return mux
 }
 
 func serveHTTP(ctx context.Context, name, addr string, handler http.Handler, logger *slog.Logger) {
