@@ -319,7 +319,7 @@ func (s *Scheduler) pruneRunners(ctx context.Context, binding config.Binding, in
 		}
 	}
 
-	runners, err := s.deps.Forge.Runners(ctx, binding.Repo, runnerNamePrefix(binding.Pool.Name))
+	runners, err := s.deps.Forge.Runners(ctx, binding.Repo, RunnerNamePrefix(binding.Pool.Name))
 	if err != nil {
 		return err
 	}
@@ -356,7 +356,7 @@ func (s *Scheduler) launchOne(ctx context.Context, binding config.Binding, oldes
 		Repo:      binding.Repo.String(),
 		VCPU:      binding.Pool.VCPU,
 		MemoryGiB: binding.Pool.MemoryGiB,
-		Env:       map[string]string{eci.EnvJITConfig: jit},
+		Env:       map[string]string{eci.EnvJITConfig: jit.Encoded},
 		TTL:       time.Duration(binding.Pool.TTLMinutes) * time.Minute,
 		Spot:      binding.Pool.Spot,
 	}
@@ -373,10 +373,10 @@ func (s *Scheduler) launchOne(ctx context.Context, binding config.Binding, oldes
 	return nil
 }
 
-// runnerNamePrefix is the name prefix that identifies this pool's runners. ECI
+// RunnerNamePrefix is the name prefix that identifies this pool's runners. ECI
 // container group names and runner names share the same value, so cleanup can
 // match one against the other.
-func runnerNamePrefix(poolName string) string {
+func RunnerNamePrefix(poolName string) string {
 	cleaned := strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
@@ -397,9 +397,9 @@ func runnerName(poolName string) string {
 	buf := make([]byte, 4)
 	if _, err := rand.Read(buf); err != nil {
 		// Names only have to be unique, not unpredictable.
-		return runnerNamePrefix(poolName) + strconv.FormatInt(time.Now().UnixNano()%1_000_000, 36)
+		return RunnerNamePrefix(poolName) + strconv.FormatInt(time.Now().UnixNano()%1_000_000, 36)
 	}
-	return runnerNamePrefix(poolName) + hex.EncodeToString(buf)
+	return RunnerNamePrefix(poolName) + hex.EncodeToString(buf)
 }
 
 // launch walks a binding's targets in preference order and returns the instance

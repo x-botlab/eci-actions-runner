@@ -6,6 +6,7 @@ dist/
 *.key
 .env
 .env.*
+.local/
 
 # Build and test output
 *.exe

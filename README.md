@@ -80,11 +80,29 @@ as ephemeral and takes whichever matching job arrives first. That is what makes 
 Runners that registered but never came online are unregistered again, which is
 what a container group that failed to start leaves behind.
 
+## Verifying the App before the first launch
+
+`github check` is read-only: it mints an installation token per repo, prints the
+permissions GitHub actually granted, and exercises the two read paths. When
+something is wrong it prints the one action that fixes it.
+
+`github jit` proves the write path: it mints a JIT config per pool, then removes
+the registration again. The encoded config is never printed. A pool that already
+has jobs waiting is skipped, because a probe runner would claim real work and
+then vanish with it.
+
+```
+REPO                         INSTALLATION  TOKEN EXPIRES  ACTIONS  ADMINISTRATION  QUEUED  RUNNERS  STATUS
+x-botlab/eci-actions-runner  10000000      18:04          read     write           0       0        ok
+```
+
 ## Usage
 
 ```console
 $ go build ./cmd/eci-runner
 $ ./eci-runner --config pools.yaml config check
+$ ./eci-runner --config pools.yaml github check
+$ ./eci-runner --config pools.yaml github jit
 $ ./eci-runner --config pools.yaml repo ls
 $ ./eci-runner --config pools.yaml pool ls
 $ ./eci-runner --config pools.yaml ps

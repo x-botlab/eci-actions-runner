@@ -75,13 +75,13 @@ func (f *fakeForge) QueuedJobs(context.Context, github.Repo) ([]github.Job, erro
 	return f.jobs, nil
 }
 
-func (f *fakeForge) CreateJITConfig(_ context.Context, _ github.Repo, name string, labels []string) (string, error) {
+func (f *fakeForge) CreateJITConfig(_ context.Context, _ github.Repo, name string, labels []string) (github.JITConfig, error) {
 	if f.jitErr != nil {
-		return "", f.jitErr
+		return github.JITConfig{}, f.jitErr
 	}
 	f.jitNames = append(f.jitNames, name)
 	f.jitLabels = append(f.jitLabels, labels)
-	return "jit-" + name, nil
+	return github.JITConfig{Encoded: "jit-" + name, RunnerID: int64(len(f.jitNames)), RunnerName: name}, nil
 }
 
 func (f *fakeForge) Runners(context.Context, github.Repo, string) ([]github.Runner, error) {
@@ -450,7 +450,7 @@ func TestReconcileSkipsPruneWhileStarting(t *testing.T) {
 }
 
 func TestRunnerName(t *testing.T) {
-	prefix := runnerNamePrefix("Pool_Short.1")
+	prefix := RunnerNamePrefix("Pool_Short.1")
 	if prefix != "eci-pool-short-1-" {
 		t.Fatalf("prefix = %q", prefix)
 	}

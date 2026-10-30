@@ -100,8 +100,9 @@ func newAPIStub(t *testing.T) (*apiStub, *AppClient) {
 
 	mux.HandleFunc("/app/installations/7/access_tokens", func(w http.ResponseWriter, _ *http.Request) {
 		stub.tokenMints.Add(1)
-		writeJSON(t, w, `{"token":"ghs_installation","expires_at":"`+
-			time.Now().Add(time.Hour).UTC().Format(time.RFC3339)+`"}`)
+		writeJSON(t, w, `{"token":"ghs_installation",
+			"expires_at":"`+time.Now().Add(time.Hour).UTC().Format(time.RFC3339)+`",
+			"permissions":{"actions":"read","administration":"write","metadata":"read"}}`)
 	})
 	mux.HandleFunc("/repos/o/r/actions/runs", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("status") {
@@ -208,13 +209,34 @@ func TestInstallationTokenIsRenewedBeforeExpiry(t *testing.T) {
 func TestCreateJITConfig(t *testing.T) {
 	_, client := newAPIStub(t)
 
-	encoded, err := client.CreateJITConfig(context.Background(),
+	config, err := client.CreateJITConfig(context.Background(),
 		Repo{Owner: "o", Name: "r", InstallationID: 7}, "eci-pool-short-1", []string{"eci-pool-short"})
 	if err != nil {
 		t.Fatalf("jit config: %v", err)
 	}
-	if encoded != "encoded" {
-		t.Fatalf("encoded = %q", encoded)
+	if config.Encoded != "encoded" {
+		t.Fatalf("encoded = %q", config.Encoded)
+	}
+	if config.RunnerID != 5 || config.RunnerName != "eci-pool-short-1" {
+		t.Fatalf("runner = %d/%q", config.RunnerID, config.RunnerName)
+	}
+}
+
+func TestTokenReportsPermissions(t *testing.T) {
+	_, client := newAPIStub(t)
+
+	token, err := client.Token(context.Background(), 7)
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+	if got := token.Permissions["administration"]; got != "write" {
+		t.Fatalf("administration = %q, want write", got)
+	}
+	if got := token.Permissions["actions"]; got != "read" {
+		t.Fatalf("actions = %q, want read", got)
+	}
+	if token.Expires.IsZero() {
+		t.Fatal("expected an expiry")
 	}
 }
 

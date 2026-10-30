@@ -31,6 +31,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(
 		newServerCmd(&configPath),
 		newConfigCmd(&configPath),
+		newGitHubCmd(&configPath),
 		newPoolCmd(&configPath),
 		newRepoCmd(&configPath),
 		newPSCmd(&configPath),
