@@ -159,6 +159,21 @@ pools:
     ttl_minutes: 380
 `
 
+func TestValidateAllowsClientIDOnly(t *testing.T) {
+	body := strings.Replace(minimal, "  app_id: 1", "  client_id: Iv1.abc123", 1)
+	if _, err := Load(writeConfig(t, body)); err != nil {
+		t.Fatalf("expected client_id alone to be accepted: %v", err)
+	}
+}
+
+func TestValidateRequiresAppIdentity(t *testing.T) {
+	body := strings.Replace(minimal, "  app_id: 1\n", "", 1)
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "github.app_id or github.client_id") {
+		t.Fatalf("expected an app identity error, got %v", err)
+	}
+}
+
 func TestBindings(t *testing.T) {
 	cfg, err := Load(writeConfig(t, multi))
 	if err != nil {

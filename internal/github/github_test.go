@@ -85,6 +85,37 @@ func TestLoadPrivateKeyAcceptsPKCS8(t *testing.T) {
 	}
 }
 
+func TestAppJWTUsesClientIDAsIssuer(t *testing.T) {
+	path, key := writeKey(t)
+	client, err := NewAppClient(Config{ClientID: "Iv1.abc123", PrivateKeyPath: path})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	signed, err := client.AppJWT(time.Now())
+	if err != nil {
+		t.Fatalf("app jwt: %v", err)
+	}
+
+	claims := &jwt.RegisteredClaims{}
+	if _, err := jwt.ParseWithClaims(signed, claims, func(*jwt.Token) (any, error) {
+		return &key.PublicKey, nil
+	}); err != nil {
+		t.Fatalf("parse jwt: %v", err)
+	}
+	if claims.Issuer != "Iv1.abc123" {
+		t.Fatalf("issuer = %q, want the client id", claims.Issuer)
+	}
+}
+
+func TestNewAppClientRequiresAnIdentity(t *testing.T) {
+	path, _ := writeKey(t)
+
+	if _, err := NewAppClient(Config{PrivateKeyPath: path}); err == nil {
+		t.Fatal("expected an error without an app id or client id")
+	}
+}
+
 // apiStub serves the handful of endpoints the client uses and counts token mints.
 type apiStub struct {
 	tokenMints atomic.Int32

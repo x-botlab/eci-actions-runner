@@ -4,7 +4,10 @@
 # the Alibaba Cloud credential comes from the instance RAM role.
 
 github:
+  # Either the numeric application ID or the OAuth client ID identifies the App.
+  # GitHub accepts both as the JWT issuer and recommends the client ID.
   app_id: 100000
+  # client_id: Iv1.0123456789abcdef
   private_key_path: /etc/eci-runner/app.pem
   # One installation per account the App is installed on. Every repo carries the
   # installation that must mint its runner tokens.

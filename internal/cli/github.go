@@ -47,10 +47,7 @@ func boundRepos(cfg *config.Config) []github.Repo {
 }
 
 func newForge(cfg *config.Config) (*github.AppClient, error) {
-	return github.NewAppClient(github.Config{
-		AppID:          cfg.GitHub.AppID,
-		PrivateKeyPath: cfg.GitHub.PrivateKeyPath,
-	})
+	return buildForge(cfg)
 }
 
 // hintFor turns an API failure into the one action that fixes it.

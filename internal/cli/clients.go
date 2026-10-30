@@ -3,6 +3,7 @@ package cli
 import (
 	"github.com/x-botlab/eci-actions-runner/internal/config"
 	"github.com/x-botlab/eci-actions-runner/internal/eci"
+	"github.com/x-botlab/eci-actions-runner/internal/github"
 )
 
 // cloudClients loads the configuration and creates one backend per ECI target.
@@ -16,6 +17,15 @@ func cloudClients(configPath string) (*config.Config, map[string]eci.Backend, er
 		return nil, nil, err
 	}
 	return cfg, clouds, nil
+}
+
+// buildForge creates the GitHub App client from the configuration.
+func buildForge(cfg *config.Config) (*github.AppClient, error) {
+	return github.NewAppClient(github.Config{
+		AppID:          cfg.GitHub.AppID,
+		ClientID:       cfg.GitHub.ClientID,
+		PrivateKeyPath: cfg.GitHub.PrivateKeyPath,
+	})
 }
 
 // buildClouds creates one backend per configured ECI target.

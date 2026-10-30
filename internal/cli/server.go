@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/x-botlab/eci-actions-runner/internal/config"
-	"github.com/x-botlab/eci-actions-runner/internal/github"
 	"github.com/x-botlab/eci-actions-runner/internal/metrics"
 	"github.com/x-botlab/eci-actions-runner/internal/scheduler"
 )
@@ -34,10 +33,7 @@ func newServerCmd(configPath *string) *cobra.Command {
 				Level: parseLevel(logLevel),
 			}))
 
-			forge, err := github.NewAppClient(github.Config{
-				AppID:          cfg.GitHub.AppID,
-				PrivateKeyPath: cfg.GitHub.PrivateKeyPath,
-			})
+			forge, err := buildForge(cfg)
 			if err != nil {
 				return err
 			}
