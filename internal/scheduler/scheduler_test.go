@@ -452,6 +452,71 @@ func TestReconcileSkipsPruneWhileStarting(t *testing.T) {
 	}
 }
 
+// Regression: tag based discovery is eventually consistent. Two passes closer
+// together than that must not both create a runner for the same job.
+func TestReconcileCountsLaunchesNotYetListed(t *testing.T) {
+	forge := &fakeForge{jobs: []github.Job{queuedJob(1, "eci-pool-short")}}
+	cloud := &fakeBackend{} // never lists anything, like a lagging tag index
+	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if cloud.launches != 1 {
+		t.Fatalf("launches = %d, want 1", cloud.launches)
+	}
+
+	// A second pass a moment later still cannot see the first container group.
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if cloud.launches != 1 {
+		t.Fatalf("launches = %d, want 1: the pending launch must occupy the slot", cloud.launches)
+	}
+}
+
+func TestPendingLaunchIsForgottenOnceVisible(t *testing.T) {
+	forge := &fakeForge{jobs: []github.Job{queuedJob(1, "eci-pool-short")}}
+	cloud := &fakeBackend{}
+	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	// The platform catches up: the container group now lists as Running.
+	cloud.instances = []eci.Instance{{
+		ID: "i-1", Name: forge.jitNames[0], Status: "Running",
+		Pool: "pool-short", Repo: "o/r", Target: "a", CreatedAt: time.Now(),
+	}}
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if cloud.launches != 1 {
+		t.Fatalf("launches = %d, want 1", cloud.launches)
+	}
+
+	s.mu.Lock()
+	remaining := len(s.inFlight)
+	s.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("in-flight entries = %d, want 0 after the instance became visible", remaining)
+	}
+}
+
+func TestPendingLaunchExpires(t *testing.T) {
+	s := New(Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Metrics: metrics.New()})
+	now := time.Now()
+	s.rememberLaunch("o/r", "pool-short", "eci-pool-short-x", now)
+
+	if got := s.pendingLaunches("o/r", "pool-short", nil, now); got != 1 {
+		t.Fatalf("pending = %d, want 1", got)
+	}
+	if got := s.pendingLaunches("o/r", "pool-short", nil, now.Add(inFlightTTL+time.Second)); got != 0 {
+		t.Fatalf("pending = %d, want 0 after the ttl", got)
+	}
+}
+
 func TestRunnerName(t *testing.T) {
 	prefix := RunnerNamePrefix("Pool_Short.1")
 	if prefix != "eci-pool-short-1-" {

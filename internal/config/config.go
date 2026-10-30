@@ -32,6 +32,14 @@ type GitHub struct {
 	ClientID       string         `yaml:"client_id"`
 	PrivateKeyPath string         `yaml:"private_key_path"`
 	Installations  []Installation `yaml:"installations"`
+	Webhook        Webhook        `yaml:"webhook"`
+}
+
+// Webhook configures the delivery fast path. A secret is mandatory when the
+// endpoint is enabled, because an unauthenticated endpoint would let anyone
+// trigger reconciles.
+type Webhook struct {
+	SecretEnv string `yaml:"secret_env"`
 }
 
 // Installation is one App installation and the repositories it can mint tokens for.
@@ -125,6 +133,9 @@ func Load(path string) (*Config, error) {
 // Defaults returns the configuration used when a field is absent.
 func Defaults() *Config {
 	return &Config{
+		GitHub: GitHub{
+			Webhook: Webhook{SecretEnv: "GITHUB_WEBHOOK_SECRET"},
+		},
 		Runner: Runner{
 			WorkFolder:            "_work",
 			PollIntervalSeconds:   30,

@@ -207,6 +207,38 @@ The flip side is that `runs-on` is an AND: a job asking for a label no runner
 carries stays queued rather than failing, so watch `eci_runner_queued_jobs`
 rather than the job page.
 
+## The webhook fast path
+
+Polling is correct on its own, but it costs up to one poll interval of latency.
+`--webhook-addr` adds a `workflow_job` endpoint that cuts that:
+
+```console
+$ export GITHUB_WEBHOOK_SECRET=...      # the secret configured on the App
+$ eci-runner --config pools.yaml server --webhook-addr :8080 --metrics-addr :9090
+```
+
+Point the App's webhook URL at `http://<host>:8080/webhook`, subscribe to
+**Workflow job**, and set the same secret. Measured on a job that takes 14 seconds:
+
+| | queue wait | job start after trigger |
+| --- | --- | --- |
+| polling only, 30s interval | 25.8s | 47s |
+| webhook + polling | 9.4s | 34s |
+
+The handler answers `202` before reconciling, because GitHub treats a response
+slower than ten seconds as a failed delivery. What remains is not detection: it is
+GitHub listing the run, one JIT mint, `CreateContainerGroup`, and the container
+boot. A control plane running in the same region as the cluster is faster than
+these numbers, which were measured across a long-haul link.
+
+Two properties matter more than the numbers:
+
+- the signature is mandatory. `--webhook-addr` without `GITHUB_WEBHOOK_SECRET`
+  refuses to start, and an unsigned or tampered delivery gets a `401`.
+- a delivery is only a hint. Losing one costs one poll interval, and the two
+  follow-up passes exist because GitHub can deliver `queued` before the job is
+  listable through the API.
+
 ## Status
 
 Working: configuration, repo/pool/target resolution, the reconcile loop, ECI

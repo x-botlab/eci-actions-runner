@@ -7,6 +7,10 @@ github:
   # The App's OAuth client ID, the value GitHub recommends as the JWT issuer.
   client_id: Iv1.0123456789abcdef
   private_key_path: /etc/eci-runner/app.pem
+  # Optional delivery fast path. Enable it by starting the server with
+  # --webhook-addr; the secret itself comes from this environment variable.
+  webhook:
+    secret_env: GITHUB_WEBHOOK_SECRET
   # One installation per account the App is installed on. Every repo carries the
   # installation that must mint its runner tokens.
   installations:

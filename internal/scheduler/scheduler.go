@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/x-botlab/eci-actions-runner/internal/config"
@@ -48,7 +49,17 @@ type Deps struct {
 type Scheduler struct {
 	deps Deps
 	kick chan struct{}
+
+	// inFlight remembers launches that the platform does not list yet. Tag based
+	// discovery is eventually consistent, so without this two passes a second
+	// apart would both decide to create a runner for the same job.
+	mu       sync.Mutex
+	inFlight map[string]time.Time
 }
+
+// inFlightTTL bounds how long a remembered launch counts as pending. Past it, the
+// platform either lists the instance or the launch never happened.
+const inFlightTTL = 3 * time.Minute
 
 // New builds a scheduler.
 func New(deps Deps) *Scheduler {
@@ -58,7 +69,50 @@ func New(deps Deps) *Scheduler {
 	if deps.PendingTimeout <= 0 {
 		deps.PendingTimeout = defaultPendingTimeout
 	}
-	return &Scheduler{deps: deps, kick: make(chan struct{}, 1)}
+	return &Scheduler{
+		deps:     deps,
+		kick:     make(chan struct{}, 1),
+		inFlight: make(map[string]time.Time),
+	}
+}
+
+func launchKey(repo, pool, name string) string { return repo + "|" + pool + "|" + name }
+
+// rememberLaunch records a container group this pass created.
+func (s *Scheduler) rememberLaunch(repo, pool, name string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.inFlight[launchKey(repo, pool, name)] = now
+}
+
+// pendingLaunches returns how many launches for this binding the platform has not
+// shown yet, and forgets the ones that are now visible or too old to trust.
+func (s *Scheduler) pendingLaunches(repo, pool string, observed []eci.Instance, now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	visible := make(map[string]struct{}, len(observed))
+	for _, instance := range observed {
+		visible[instance.Name] = struct{}{}
+	}
+
+	prefix := repo + "|" + pool + "|"
+	pending := 0
+	for key, at := range s.inFlight {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		if _, ok := visible[strings.TrimPrefix(key, prefix)]; ok {
+			delete(s.inFlight, key)
+			continue
+		}
+		if now.Sub(at) > inFlightTTL {
+			delete(s.inFlight, key)
+			continue
+		}
+		pending++
+	}
+	return pending
 }
 
 // Kick requests a reconcile soon, for example when a webhook arrives. The
@@ -69,6 +123,11 @@ func (s *Scheduler) Kick() {
 	default:
 	}
 }
+
+// followUpDelays are the extra passes a webhook schedules. The first covers a
+// delivery that arrives before GitHub lists the job; the second covers a run whose
+// jobs appear a little later.
+var followUpDelays = []time.Duration{1500 * time.Millisecond, 5 * time.Second}
 
 // Run reconciles on a timer until ctx is cancelled. Passes are serial on
 // purpose: concurrent reconcilers would race on the same capacity budget.
@@ -82,18 +141,39 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		"targets", len(s.deps.Clouds),
 	)
 
+	var (
+		pending []time.Duration
+		settle  <-chan time.Time
+	)
 	for {
 		select {
 		case <-ctx.Done():
 			s.deps.Logger.Info("scheduler stopping")
 			return nil
 		case <-s.kick:
+			s.reconcileOnce(ctx)
+			pending = followUpDelays
+			settle = time.After(pending[0])
+			pending = pending[1:]
+		case <-settle:
+			s.reconcileOnce(ctx)
+			if len(pending) > 0 {
+				settle = time.After(pending[0])
+				pending = pending[1:]
+			} else {
+				// A nil channel blocks forever, which is what a disabled
+				// follow-up should do.
+				settle = nil
+			}
 		case <-ticker.C:
+			s.reconcileOnce(ctx)
 		}
+	}
+}
 
-		if err := s.Reconcile(ctx); err != nil {
-			s.deps.Logger.Error("reconcile failed", "err", err)
-		}
+func (s *Scheduler) reconcileOnce(ctx context.Context) {
+	if err := s.Reconcile(ctx); err != nil {
+		s.deps.Logger.Error("reconcile failed", "err", err)
 	}
 }
 
@@ -188,6 +268,16 @@ func (s *Scheduler) reconcileBinding(ctx context.Context, binding config.Binding
 			active++
 		}
 	}
+	// A launch that the platform has not listed yet still occupies a slot.
+	if pending := s.pendingLaunches(repo, spec.Name, observed, time.Now()); pending > 0 {
+		active += pending
+		s.deps.Logger.Debug("counting launches that are not listed yet",
+			"repo", repo, "pool", spec.Name, "pending", pending)
+	}
+
+	s.deps.Logger.Debug("observed",
+		"repo", repo, "pool", spec.Name,
+		"waiting", waiting, "active", active, "desired", spec.Desired(waiting))
 
 	desired := spec.Desired(waiting)
 	for active < desired {
@@ -365,6 +455,7 @@ func (s *Scheduler) launchOne(ctx context.Context, binding config.Binding, oldes
 	if err != nil {
 		return err
 	}
+	s.rememberLaunch(spec.Repo, spec.Pool, name, time.Now())
 	if !oldest.IsZero() {
 		s.deps.Metrics.QueueWait.WithLabelValues(spec.Repo, spec.Pool).Observe(time.Since(oldest).Seconds())
 	}
