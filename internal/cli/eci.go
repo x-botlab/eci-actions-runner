@@ -130,6 +130,13 @@ func newECIProbeCmd(configPath *string) *cobra.Command {
 			if ready.CreatedAt.IsZero() {
 				fmt.Fprintf(out, "note            the platform did not report a creation time\n")
 			}
+
+			// Reaching Running only proves the container booted. The runner coming
+			// online also proves egress and the JIT config, which is what a job
+			// actually needs.
+			if err := waitForRunnerOnline(ctx, forge, binding.Repo, name, out); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -158,6 +165,7 @@ func waitForRunning(ctx context.Context, backend eci.Backend, binding config.Bin
 	defer ticker.Stop()
 
 	lastStatus := ""
+	internetIP := ""
 	for {
 		instances, err := backend.Describe(ctx, selector)
 		if err != nil {
@@ -171,10 +179,20 @@ func waitForRunning(ctx context.Context, backend eci.Backend, binding config.Bin
 				fmt.Fprintf(out, "status          %s\n", instance.Status)
 				lastStatus = instance.Status
 			}
+			if instance.InternetIP != "" && internetIP == "" {
+				internetIP = instance.InternetIP
+				fmt.Fprintf(out, "public ip       %s\n", internetIP)
+			}
 			if instance.Status == "Running" {
+				if internetIP == "" {
+					fmt.Fprintf(out, "public ip       none (target has no auto_create_eip)\n")
+				}
 				return instance, nil
 			}
 			if instance.Terminal() {
+				for _, event := range instance.Events {
+					fmt.Fprintf(out, "event           %s: %s\n", event.Reason, event.Message)
+				}
 				return instance, fmt.Errorf("container group reached %s before Running", instance.Status)
 			}
 		}
@@ -186,6 +204,47 @@ func waitForRunning(ctx context.Context, backend eci.Backend, binding config.Bin
 			}
 			return eci.Instance{}, fmt.Errorf("still %s when the probe timed out", lastStatus)
 		case <-ticker.C:
+		}
+	}
+}
+
+// waitForRunnerOnline waits until GitHub reports the probe runner as online. A
+// container that boots but never registers means the container group has no
+// egress, which no amount of ECI-side inspection shows.
+func waitForRunnerOnline(ctx context.Context, forge *github.AppClient, repo github.Repo, name string, out io.Writer) error {
+	const poll = 5 * time.Second
+
+	deadline := time.Now().Add(2 * time.Minute)
+	lastStatus := ""
+	for {
+		runners, err := forge.Runners(ctx, repo, name)
+		if err != nil {
+			return err
+		}
+		for _, runner := range runners {
+			if runner.Name != name {
+				continue
+			}
+			if runner.Status != lastStatus {
+				fmt.Fprintf(out, "runner %-9s %s\n", runner.Status, runner.Name)
+				lastStatus = runner.Status
+			}
+			if runner.Status == "online" {
+				return nil
+			}
+		}
+
+		if time.Now().After(deadline) {
+			if lastStatus == "" {
+				return errors.New("the runner never registered: the container group likely has no egress to github.com")
+			}
+			return fmt.Errorf("the runner stayed %s: it cannot reach github.com", lastStatus)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
 		}
 	}
 }

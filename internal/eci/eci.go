@@ -63,6 +63,11 @@ type Config struct {
 	VSwitchIDs      []string
 	SecurityGroupID string
 	RAMRoleName     string
+	// AutoCreateEIP gives every container group its own public IP. A runner needs
+	// egress to reach GitHub, and a VPC without a NAT gateway has no other way out.
+	AutoCreateEIP bool
+	// EIPBandwidth is the public bandwidth in Mbit/s. ECI defaults to 5.
+	EIPBandwidth int32
 	// Registries holds the credentials for private images. ECI picks the one
 	// whose server matches the image, so unrelated registries are never sent.
 	Registries []Registry
@@ -94,8 +99,19 @@ type Instance struct {
 	JobID  string
 	// Target is the ECI target the instance lives in, needed because a delete
 	// has to go to the same regional endpoint that created it.
-	Target    string
+	Target string
+	// InternetIP is the public address, populated only when the target creates
+	// an EIP for each container group.
+	InternetIP string
+	// Events explains a failure, for example why scheduling was refused.
+	Events    []Event
 	CreatedAt time.Time
+}
+
+// Event is one platform event attached to a container group.
+type Event struct {
+	Reason  string
+	Message string
 }
 
 // Selector filters instances by their tags. Empty fields match everything.
@@ -338,6 +354,12 @@ func (c *Client) launchRequest(spec Spec, vswitch string) (*eciclient.CreateCont
 	if spec.Spot {
 		request.SpotStrategy = tea.String("SpotAsPriceGo")
 	}
+	if c.cfg.AutoCreateEIP {
+		request.AutoCreateEip = tea.Bool(true)
+		if c.cfg.EIPBandwidth > 0 {
+			request.EipBandwidth = tea.Int32(c.cfg.EIPBandwidth)
+		}
+	}
 	return request, nil
 }
 
@@ -554,6 +576,13 @@ func selectorEntries(sel Selector, target string) []struct{ key, value string } 
 	}
 }
 
+func valueOr(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
 func toInstance(group *eciclient.DescribeContainerGroupsResponseBodyContainerGroups, target string) Instance {
 	instance := Instance{Target: target}
 	if group == nil {
@@ -567,6 +596,18 @@ func toInstance(group *eciclient.DescribeContainerGroupsResponseBodyContainerGro
 	}
 	if group.Status != nil {
 		instance.Status = *group.Status
+	}
+	if group.InternetIp != nil {
+		instance.InternetIP = *group.InternetIp
+	}
+	for _, event := range group.Events {
+		if event == nil {
+			continue
+		}
+		instance.Events = append(instance.Events, Event{
+			Reason:  valueOr(event.Reason, ""),
+			Message: valueOr(event.Message, ""),
+		})
 	}
 	if group.CreationTime != nil {
 		if created, err := time.Parse(time.RFC3339, *group.CreationTime); err == nil {

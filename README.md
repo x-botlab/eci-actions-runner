@@ -153,6 +153,48 @@ eci:
 `server` subcommand validates those variables at start-up, so a missing one stops
 the process immediately instead of failing the first launch.
 
+A runner needs egress to reach GitHub, so a target either sits behind a NAT
+gateway or sets `auto_create_eip: true` and gives every container group its own
+public IP:
+
+```yaml
+eci:
+  targets:
+    - name: hongkong
+      region_id: cn-hongkong
+      vswitch_ids: [vsw-xxx]
+      security_group_id: sg-xxx
+      auto_create_eip: true
+      eip_bandwidth: 20
+```
+
+## Verifying a deployment without a workflow
+
+```console
+$ eci-runner --config pools.yaml github check          # App permissions, read-only
+$ eci-runner --config pools.yaml github jit            # mint and delete a registration
+$ eci-runner --config pools.yaml eci probe --pool pool-short
+```
+
+`eci probe` runs the production launch path once and reports each phase:
+
+```
+jit config      eci-pool-short-probe-4d97bc (4120 bytes, sha256:912927b6 in 2.6s)
+created         eci-j6cgd9jq3tmgyyaqc5zq in target hongkong after 4.6s
+status          Scheduling
+public ip       8.210.164.137
+status          Running
+cold start      21s (create 5s, image pull and boot 16s)
+runner offline  eci-pool-short-probe-4d97bc
+runner online   eci-pool-short-probe-4d97bc
+unregistered    runner 6
+deleted         eci-j6cgd9jq3tmgyyaqc5zq
+```
+
+`runner online` is the line that matters: it means the image pulled, the JIT
+config was accepted, and the container group can reach github.com. Everything
+before it only proves the container booted.
+
 ## Status
 
 Working: configuration, repo/pool/target resolution, the reconcile loop, ECI

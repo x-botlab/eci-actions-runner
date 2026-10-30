@@ -199,6 +199,22 @@ eci:
 	}
 }
 
+func TestValidateRejectsBandwidthWithoutEIP(t *testing.T) {
+	body := strings.Replace(minimal, "      security_group_id: sg-1\n", "      security_group_id: sg-1\n      eip_bandwidth: 20\n", 1)
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "auto_create_eip is false") {
+		t.Fatalf("expected a bandwidth/eip mismatch error, got %v", err)
+	}
+}
+
+func TestValidateAcceptsEIP(t *testing.T) {
+	body := strings.Replace(minimal, "      security_group_id: sg-1\n",
+		"      security_group_id: sg-1\n      auto_create_eip: true\n      eip_bandwidth: 20\n", 1)
+	if _, err := Load(writeConfig(t, body)); err != nil {
+		t.Fatalf("expected eip settings to be accepted: %v", err)
+	}
+}
+
 func TestValidateRequiresClientID(t *testing.T) {
 	body := strings.Replace(minimal, "  client_id: Iv1.minimal\n", "", 1)
 	_, err := Load(writeConfig(t, body))

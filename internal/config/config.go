@@ -78,6 +78,11 @@ type Target struct {
 	VSwitchIDs      []string `yaml:"vswitch_ids"`
 	SecurityGroupID string   `yaml:"security_group_id"`
 	RAMRoleName     string   `yaml:"ram_role_name"`
+	// AutoCreateEIP gives each container group its own public IP, which is how a
+	// runner reaches GitHub when the VPC has no NAT gateway.
+	AutoCreateEIP bool `yaml:"auto_create_eip"`
+	// EIPBandwidth is the public bandwidth in Mbit/s, default 5.
+	EIPBandwidth int32 `yaml:"eip_bandwidth"`
 }
 
 // Binding is one schedulable unit: a repository, the pool serving it and the
@@ -275,6 +280,12 @@ func (c *Config) validateECI() error {
 		}
 		if strings.TrimSpace(t.SecurityGroupID) == "" {
 			return fmt.Errorf("eci target %q: security_group_id is required", t.Name)
+		}
+		if t.EIPBandwidth < 0 {
+			return fmt.Errorf("eci target %q: eip_bandwidth must not be negative", t.Name)
+		}
+		if t.EIPBandwidth > 0 && !t.AutoCreateEIP {
+			return fmt.Errorf("eci target %q: eip_bandwidth is set but auto_create_eip is false", t.Name)
 		}
 	}
 	return nil

@@ -247,6 +247,31 @@ func TestLaunchRequestCarriesRegionAndShape(t *testing.T) {
 	}
 }
 
+func TestLaunchRequestSetsEIPWhenTargetAsks(t *testing.T) {
+	client := &Client{cfg: Config{RegionID: "cn-hongkong", AutoCreateEIP: true, EIPBandwidth: 20}}
+	spec := Spec{Name: "n", Image: "docker.io/library/ubuntu:24.04"}
+
+	request, err := client.launchRequest(spec, "vsw-1")
+	if err != nil {
+		t.Fatalf("launch request: %v", err)
+	}
+	if request.AutoCreateEip == nil || !*request.AutoCreateEip {
+		t.Fatal("expected AutoCreateEip to be set")
+	}
+	if request.EipBandwidth == nil || *request.EipBandwidth != 20 {
+		t.Fatalf("EipBandwidth = %v, want 20", request.EipBandwidth)
+	}
+
+	plain := &Client{cfg: Config{RegionID: "cn-hongkong"}}
+	request, err = plain.launchRequest(spec, "vsw-1")
+	if err != nil {
+		t.Fatalf("launch request: %v", err)
+	}
+	if request.AutoCreateEip != nil {
+		t.Fatal("a target without auto_create_eip must not request a public IP")
+	}
+}
+
 func TestLaunchRequestRejectsIncompleteSpec(t *testing.T) {
 	client := &Client{cfg: Config{RegionID: "cn-hongkong"}}
 

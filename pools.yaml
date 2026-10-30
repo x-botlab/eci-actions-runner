@@ -46,6 +46,11 @@ eci:
         - vsw-yyyyyyyyyyyyyyyyy
       security_group_id: sg-xxxxxxxxxxxxxxxxx
       ram_role_name: eci-runner-self-delete
+      # A runner needs egress to reach GitHub. Without a NAT gateway in the VPC,
+      # each container group gets its own public IP instead.
+      # Measured: eip_bandwidth 20 pulls a 2.5 GB image cross-region in ~16s.
+      auto_create_eip: true
+      eip_bandwidth: 20
     - name: beijing
       region_id: cn-beijing
       endpoint: eci.cn-beijing.aliyuncs.com
@@ -53,6 +58,8 @@ eci:
         - vsw-zzzzzzzzzzzzzzzzz
       security_group_id: sg-yyyyyyyyyyyyyyyyy
       ram_role_name: eci-runner-self-delete
+      auto_create_eip: true
+      eip_bandwidth: 20
 
 runner:
   work_folder: _work
