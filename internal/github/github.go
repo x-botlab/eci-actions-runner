@@ -336,6 +336,29 @@ func (c *AppClient) QueuedJobs(ctx context.Context, repo Repo) ([]Job, error) {
 	return jobs, nil
 }
 
+// defaultRunnerLabels are the labels a normally registered runner gets for free.
+// A JIT registration has no config.sh step, so nothing adds them: without these,
+// a runner is online and idle while `runs-on: [self-hosted, ...]` never matches it.
+var defaultRunnerLabels = []string{"self-hosted", "linux", "x64"}
+
+// runnerLabels merges the pool labels with the platform defaults.
+func runnerLabels(poolLabels []string) []string {
+	labels := make([]string, 0, len(defaultRunnerLabels)+len(poolLabels))
+	seen := make(map[string]struct{}, len(defaultRunnerLabels)+len(poolLabels))
+
+	for _, label := range append(append([]string{}, defaultRunnerLabels...), poolLabels...) {
+		if label == "" {
+			continue
+		}
+		if _, dup := seen[label]; dup {
+			continue
+		}
+		seen[label] = struct{}{}
+		labels = append(labels, label)
+	}
+	return labels
+}
+
 // CreateJITConfig mints a one-shot runner configuration for a single job.
 func (c *AppClient) CreateJITConfig(ctx context.Context, repo Repo, name string, labels []string) (JITConfig, error) {
 	client, err := c.installationClient(ctx, repo.InstallationID)
@@ -346,7 +369,7 @@ func (c *AppClient) CreateJITConfig(ctx context.Context, repo Repo, name string,
 	config, _, err := client.Actions.CreateRepoJITConfig(ctx, repo.Owner, repo.Name, gh.CreateJITConfigRequest{
 		Name:          name,
 		RunnerGroupID: defaultRunnerGroupID,
-		Labels:        labels,
+		Labels:        runnerLabels(labels),
 	})
 	if err != nil {
 		return JITConfig{}, fmt.Errorf("github: create jit config %q for %s: %w", name, repo, err)

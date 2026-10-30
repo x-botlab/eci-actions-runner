@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"net"
 	"os"
 	"slices"
 	"strconv"
@@ -294,7 +296,9 @@ func (c *Client) launchIn(ctx context.Context, spec Spec, vswitch string) (strin
 		return "", err
 	}
 
-	response, err := c.api.CreateContainerGroup(request)
+	response, err := withRetry(ctx, "create container group", func() (*eciclient.CreateContainerGroupResponse, error) {
+		return c.api.CreateContainerGroup(request)
+	})
 	if err != nil {
 		return "", fmt.Errorf("eci %s: create %s: %w", c.cfg.Name, spec.Name, err)
 	}
@@ -396,12 +400,14 @@ func (c *Client) listTagged(ctx context.Context, sel Selector) ([]string, error)
 	var nextToken *string
 
 	for {
-		response, err := c.api.ListTagResources(&eciclient.ListTagResourcesRequest{
-			RegionId:     tea.String(c.cfg.RegionID),
-			ResourceType: tea.String(resourceTypeContainerGroup),
-			Tag:          listTagFilter(sel, c.cfg.Name),
-			Limit:        tea.String(strconv.Itoa(maxTagPageSize)),
-			NextToken:    nextToken,
+		response, err := withRetry(ctx, "list tagged resources", func() (*eciclient.ListTagResourcesResponse, error) {
+			return c.api.ListTagResources(&eciclient.ListTagResourcesRequest{
+				RegionId:     tea.String(c.cfg.RegionID),
+				ResourceType: tea.String(resourceTypeContainerGroup),
+				Tag:          listTagFilter(sel, c.cfg.Name),
+				Limit:        tea.String(strconv.Itoa(maxTagPageSize)),
+				NextToken:    nextToken,
+			})
 		})
 		if err != nil {
 			return nil, fmt.Errorf("eci %s: list tagged resources: %w", c.cfg.Name, err)
@@ -432,10 +438,12 @@ func (c *Client) listTagged(ctx context.Context, sel Selector) ([]string, error)
 
 // describeByIDs fetches the detail for one bounded batch of ids.
 func (c *Client) describeByIDs(ctx context.Context, ids []string) ([]Instance, error) {
-	response, err := c.api.DescribeContainerGroups(&eciclient.DescribeContainerGroupsRequest{
-		RegionId:          tea.String(c.cfg.RegionID),
-		ContainerGroupIds: tea.String(strings.Join(ids, ",")),
-		Limit:             tea.Int32(int32(maxDescribeIDs)),
+	response, err := withRetry(ctx, "describe container groups", func() (*eciclient.DescribeContainerGroupsResponse, error) {
+		return c.api.DescribeContainerGroups(&eciclient.DescribeContainerGroupsRequest{
+			RegionId:          tea.String(c.cfg.RegionID),
+			ContainerGroupIds: tea.String(strings.Join(ids, ",")),
+			Limit:             tea.Int32(int32(maxDescribeIDs)),
+		})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("eci %s: describe: %w", c.cfg.Name, err)
@@ -453,10 +461,12 @@ func (c *Client) describeByIDs(ctx context.Context, ids []string) ([]Instance, e
 
 // Terminate deletes one container group.
 func (c *Client) Terminate(ctx context.Context, id string) error {
-	_, err := c.api.DeleteContainerGroup(&eciclient.DeleteContainerGroupRequest{
-		RegionId:         tea.String(c.cfg.RegionID),
-		ContainerGroupId: tea.String(id),
-		ClientToken:      tea.String(clientToken("delete:" + id)),
+	_, err := withRetry(ctx, "delete container group", func() (*eciclient.DeleteContainerGroupResponse, error) {
+		return c.api.DeleteContainerGroup(&eciclient.DeleteContainerGroupRequest{
+			RegionId:         tea.String(c.cfg.RegionID),
+			ContainerGroupId: tea.String(id),
+			ClientToken:      tea.String(clientToken("delete:" + id)),
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("eci %s: delete %s: %w", c.cfg.Name, id, err)
@@ -494,6 +504,61 @@ func (c *Client) Validate() error {
 		}
 	}
 	return nil
+}
+
+// retryable reports whether an error is worth another attempt: a transport drop
+// (EOF, reset, timeout) or a server-side failure. Client errors are not retried,
+// because a bad parameter fails the same way every time.
+func retryable(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var sdkErr *tea.SDKError
+	if errors.As(err, &sdkErr) {
+		if sdkErr.StatusCode == nil {
+			return false
+		}
+		return *sdkErr.StatusCode >= 500 || *sdkErr.StatusCode == 429
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		strings.Contains(err.Error(), "EOF") ||
+		strings.Contains(err.Error(), "connection reset")
+}
+
+// withRetry runs fn until it succeeds, the error is not retryable, or attempts run
+// out. Every call it wraps is either a read or carries a client token, so a repeat
+// is safe.
+func withRetry[T any](ctx context.Context, op string, fn func() (T, error)) (T, error) {
+	var zero T
+
+	const attempts = 4
+	var lastErr error
+	for attempt := range attempts {
+		if attempt > 0 {
+			delay := time.Duration(200<<attempt) * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+
+		value, err := fn()
+		if err == nil {
+			return value, nil
+		}
+		lastErr = err
+		if !retryable(err) {
+			return zero, err
+		}
+	}
+	return zero, fmt.Errorf("%s: %w (gave up after %d attempts)", op, lastErr, attempts)
 }
 
 // clientToken derives a stable token from name so that retrying the same launch

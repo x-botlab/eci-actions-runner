@@ -41,9 +41,19 @@ jobs:
 
       - name: Egress
         run: |
-          curl -fsS -o /dev/null -w 'github.com     %{http_code}\n' https://github.com
-          curl -fsS -o /dev/null -w 'api.github.com %{http_code}\n' https://api.github.com
-          curl -fsS -o /dev/null -w 'registry       %{http_code}\n' https://registry.cn-hangzhou.aliyuncs.com/v2/
+          # 401 is a success here: the registry is private, so an unauthenticated
+          # probe must be refused. The point is reachability, not authorisation.
+          check() {
+            code=$(curl -s -o /dev/null -m 15 -w '%{http_code}' "$1" || echo 000)
+            printf '%-46s %s\n' "$1" "$code"
+            case "$code" in
+              200|301|302|401|403) ;;
+              *) echo "unreachable: $1" >&2; return 1 ;;
+            esac
+          }
+          check https://github.com
+          check https://api.github.com
+          check https://registry.cn-hangzhou.aliyuncs.com/v2/
 
       - name: Secrets are not visible to the job
         run: |

@@ -1,6 +1,9 @@
 package eci
 
 import (
+	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -244,6 +247,63 @@ func TestLaunchRequestCarriesRegionAndShape(t *testing.T) {
 	}
 	if len(container.EnvironmentVar) != 1 || *container.EnvironmentVar[0].Key != EnvJITConfig {
 		t.Fatalf("env = %+v", container.EnvironmentVar)
+	}
+}
+
+func TestRetryableClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "nil", err: nil, want: false},
+		{name: "eof", err: io.EOF, want: true},
+		{name: "unexpected eof", err: io.ErrUnexpectedEOF, want: true},
+		{name: "wrapped eof text", err: errors.New("Post url: EOF"), want: true},
+		{name: "connection reset", err: errors.New("read: connection reset by peer"), want: true},
+		{name: "bad parameter", err: &tea.SDKError{StatusCode: tea.Int(400)}, want: false},
+		{name: "forbidden", err: &tea.SDKError{StatusCode: tea.Int(403)}, want: false},
+		{name: "server error", err: &tea.SDKError{StatusCode: tea.Int(503)}, want: true},
+		{name: "throttled", err: &tea.SDKError{StatusCode: tea.Int(429)}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := retryable(tt.err); got != tt.want {
+				t.Fatalf("retryable = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWithRetryStopsOnNonRetryable(t *testing.T) {
+	calls := 0
+	_, err := withRetry(context.Background(), "op", func() (string, error) {
+		calls++
+		return "", &tea.SDKError{StatusCode: tea.Int(400)}
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1: a client error must not be retried", calls)
+	}
+}
+
+func TestWithRetryRecoversFromTransientError(t *testing.T) {
+	calls := 0
+	value, err := withRetry(context.Background(), "op", func() (string, error) {
+		calls++
+		if calls < 3 {
+			return "", io.EOF
+		}
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if value != "ok" || calls != 3 {
+		t.Fatalf("value %q after %d calls", value, calls)
 	}
 }
 

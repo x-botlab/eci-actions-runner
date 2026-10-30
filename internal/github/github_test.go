@@ -6,10 +6,12 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -137,6 +139,15 @@ func newAPIStub(t *testing.T) (*apiStub, *AppClient) {
 		if r.Method != http.MethodPost {
 			t.Errorf("jit config expects POST, got %s", r.Method)
 		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		// The pool label alone is not enough: without self-hosted the runner is
+		// online but unreachable by runs-on.
+		if !strings.Contains(string(body), `"self-hosted"`) {
+			t.Errorf("jit request is missing the default labels: %s", body)
+		}
 		writeJSON(t, w, `{"runner":{"id":5,"name":"eci-pool-short-1"},"encoded_jit_config":"encoded"}`)
 	})
 	mux.HandleFunc("/repos/o/r/actions/runners", func(w http.ResponseWriter, _ *http.Request) {
@@ -212,6 +223,20 @@ func TestInstallationTokenIsRenewedBeforeExpiry(t *testing.T) {
 	}
 	if mints := stub.tokenMints.Load(); mints != 2 {
 		t.Fatalf("minted %d tokens, want 2 after expiry", mints)
+	}
+}
+
+func TestRunnerLabelsAddPlatformDefaults(t *testing.T) {
+	got := runnerLabels([]string{"eci-pool-short"})
+	want := []string{"self-hosted", "linux", "x64", "eci-pool-short"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("labels = %v, want %v", got, want)
+	}
+
+	// A pool that names a default label must not produce a duplicate.
+	got = runnerLabels([]string{"self-hosted", "eci-pool-short"})
+	if !slices.Equal(got, want) {
+		t.Fatalf("labels = %v, want %v", got, want)
 	}
 }
 

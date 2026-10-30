@@ -26,8 +26,55 @@ func newECICmd(configPath *string) *cobra.Command {
 		Use:   "eci",
 		Short: "Check the ECI side without GitHub jobs",
 	}
-	cmd.AddCommand(newECIProbeCmd(configPath))
+	cmd.AddCommand(newECIProbeCmd(configPath), newECIRmCmd(configPath))
 	return cmd
+}
+
+// newECIRmCmd deletes one specific container group. Reconcile only removes what is
+// provably dead, which is right, but an operator sometimes needs to remove a live
+// instance: a wedged one, or one created before a configuration change.
+func newECIRmCmd(configPath *string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <instance-name-or-id>",
+		Short: "Delete one container group by name or id",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, clouds, err := cloudClients(*configPath)
+			if err != nil {
+				return err
+			}
+
+			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
+
+			found, err := observeBindings(ctx, cfg, clouds)
+			if err != nil {
+				return err
+			}
+
+			wanted := args[0]
+			matches := 0
+			for _, entry := range found {
+				if entry.instance.ID != wanted && entry.instance.Name != wanted {
+					continue
+				}
+				matches++
+				backend, ok := clouds[entry.instance.Target]
+				if !ok {
+					return fmt.Errorf("eci target %q has no backend", entry.instance.Target)
+				}
+				if err := backend.Terminate(ctx, entry.instance.ID); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "deleted %s (%s, was %s)\n",
+					entry.instance.Name, entry.instance.Target, entry.instance.Status)
+			}
+			if matches == 0 {
+				return fmt.Errorf("no container group named %q", wanted)
+			}
+			return nil
+		},
+	}
 }
 
 // newECIProbeCmd runs the whole launch path once: mint a JIT config, create one
