@@ -81,6 +81,13 @@ as ephemeral and takes whichever matching job arrives first. That is what makes 
 Runners that registered but never came online are unregistered again, which is
 what a container group that failed to start leaves behind.
 
+The describe call is the one step where a wrong wire format bites hard:
+`DescribeContainerGroups` takes `ContainerGroupIds` as a **JSON array string**,
+not a comma separated list. A comma list is accepted while the pool holds a
+single container group and rejected with `400 InvalidParameter` from the second
+one on — and because a failed describe skips the binding, the pool stops
+scaling *and* stops collecting itself. Encode it with `encoding/json`.
+
 ## Verifying the App before the first launch
 
 `github check` is read-only: it mints an installation token per repo, prints the
@@ -212,6 +219,10 @@ in, and a pool label may repeat them harmlessly.
 The flip side is that `runs-on` is an AND: a job asking for a label no runner
 carries stays queued rather than failing, so watch `eci_runner_queued_jobs`
 rather than the job page.
+
+One more field matters for cold start: `AutoMatchImageCache` is always sent, so a
+container group reuses ECI's cached image layers when the pool has pulled the
+same tag before.
 
 ## Probes
 
