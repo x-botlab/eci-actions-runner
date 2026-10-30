@@ -19,7 +19,7 @@ func writeConfig(t *testing.T, body string) string {
 
 const minimal = `
 github:
-  app_id: 1
+  client_id: Iv1.minimal
   private_key_path: /tmp/app.pem
   installations:
     - id: 2
@@ -115,7 +115,7 @@ func TestPoolLookup(t *testing.T) {
 
 const multi = `
 github:
-  app_id: 1
+  client_id: Iv1.multi
   private_key_path: /tmp/app.pem
   installations:
     - id: 2
@@ -159,18 +159,11 @@ pools:
     ttl_minutes: 380
 `
 
-func TestValidateAllowsClientIDOnly(t *testing.T) {
-	body := strings.Replace(minimal, "  app_id: 1", "  client_id: Iv1.abc123", 1)
-	if _, err := Load(writeConfig(t, body)); err != nil {
-		t.Fatalf("expected client_id alone to be accepted: %v", err)
-	}
-}
-
-func TestValidateRequiresAppIdentity(t *testing.T) {
-	body := strings.Replace(minimal, "  app_id: 1\n", "", 1)
+func TestValidateRequiresClientID(t *testing.T) {
+	body := strings.Replace(minimal, "  client_id: Iv1.minimal\n", "", 1)
 	_, err := Load(writeConfig(t, body))
-	if err == nil || !strings.Contains(err.Error(), "github.app_id or github.client_id") {
-		t.Fatalf("expected an app identity error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "github.client_id is required") {
+		t.Fatalf("expected a client id error, got %v", err)
 	}
 }
 

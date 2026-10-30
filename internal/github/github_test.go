@@ -36,7 +36,7 @@ func writeKey(t *testing.T) (string, *rsa.PrivateKey) {
 
 func TestAppJWTCarriesIssuerAndShortExpiry(t *testing.T) {
 	path, key := writeKey(t)
-	client, err := NewAppClient(Config{AppID: 4242, PrivateKeyPath: path})
+	client, err := NewAppClient(Config{ClientID: "Iv1.abc123", PrivateKeyPath: path})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -54,8 +54,8 @@ func TestAppJWTCarriesIssuerAndShortExpiry(t *testing.T) {
 	if err != nil || !parsed.Valid {
 		t.Fatalf("parse jwt: %v", err)
 	}
-	if claims.Issuer != "4242" {
-		t.Fatalf("issuer = %q, want 4242", claims.Issuer)
+	if claims.Issuer != "Iv1.abc123" {
+		t.Fatalf("issuer = %q, want the client id", claims.Issuer)
 	}
 	if lifetime := claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time); lifetime > 10*time.Minute {
 		t.Fatalf("lifetime %s exceeds the 10 minute limit", lifetime)
@@ -85,34 +85,12 @@ func TestLoadPrivateKeyAcceptsPKCS8(t *testing.T) {
 	}
 }
 
-func TestAppJWTUsesClientIDAsIssuer(t *testing.T) {
-	path, key := writeKey(t)
-	client, err := NewAppClient(Config{ClientID: "Iv1.abc123", PrivateKeyPath: path})
-	if err != nil {
-		t.Fatalf("new client: %v", err)
-	}
-
-	signed, err := client.AppJWT(time.Now())
-	if err != nil {
-		t.Fatalf("app jwt: %v", err)
-	}
-
-	claims := &jwt.RegisteredClaims{}
-	if _, err := jwt.ParseWithClaims(signed, claims, func(*jwt.Token) (any, error) {
-		return &key.PublicKey, nil
-	}); err != nil {
-		t.Fatalf("parse jwt: %v", err)
-	}
-	if claims.Issuer != "Iv1.abc123" {
-		t.Fatalf("issuer = %q, want the client id", claims.Issuer)
-	}
-}
-
-func TestNewAppClientRequiresAnIdentity(t *testing.T) {
+func TestNewAppClientRequiresClientID(t *testing.T) {
 	path, _ := writeKey(t)
 
-	if _, err := NewAppClient(Config{PrivateKeyPath: path}); err == nil {
-		t.Fatal("expected an error without an app id or client id")
+	_, err := NewAppClient(Config{PrivateKeyPath: path})
+	if err == nil || !strings.Contains(err.Error(), "client id is required") {
+		t.Fatalf("expected a client id error, got %v", err)
 	}
 }
 
@@ -172,7 +150,7 @@ func newAPIStub(t *testing.T) (*apiStub, *AppClient) {
 	t.Cleanup(server.Close)
 	stub.handler = mux
 
-	client, err := NewAppClient(Config{AppID: 1, PrivateKeyPath: path, BaseURL: server.URL + "/"})
+	client, err := NewAppClient(Config{ClientID: "Iv1.test", PrivateKeyPath: path, BaseURL: server.URL + "/"})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}

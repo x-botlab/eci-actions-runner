@@ -22,7 +22,6 @@ func cloudClients(configPath string) (*config.Config, map[string]eci.Backend, er
 // buildForge creates the GitHub App client from the configuration.
 func buildForge(cfg *config.Config) (*github.AppClient, error) {
 	return github.NewAppClient(github.Config{
-		AppID:          cfg.GitHub.AppID,
 		ClientID:       cfg.GitHub.ClientID,
 		PrivateKeyPath: cfg.GitHub.PrivateKeyPath,
 	})

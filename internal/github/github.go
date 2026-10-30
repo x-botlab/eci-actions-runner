@@ -12,7 +12,6 @@ import (
 	"maps"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,26 +54,12 @@ func (r Repo) String() string { return r.Owner + "/" + r.Name }
 // Config is the app-level identity. Repository scope arrives with each call, so
 // one client serves every installation the App is installed on.
 type Config struct {
-	// AppID is the numeric application ID.
-	AppID int64
-	// ClientID is the OAuth client ID. GitHub recommends it as the JWT issuer
-	// and accepts either value, so exactly one of AppID and ClientID is needed.
+	// ClientID is the OAuth client ID, which GitHub recommends as the JWT
+	// issuer. It is a public identifier: the signature is what proves identity.
 	ClientID       string
 	PrivateKeyPath string
 	// BaseURL overrides the API root, for tests and GitHub Enterprise.
 	BaseURL string
-}
-
-// issuer returns the JWT iss claim. GitHub accepts the application ID or the
-// client ID; the client ID is the documented recommendation.
-func (c Config) issuer() (string, error) {
-	switch {
-	case strings.TrimSpace(c.ClientID) != "":
-		return strings.TrimSpace(c.ClientID), nil
-	case c.AppID > 0:
-		return strconv.FormatInt(c.AppID, 10), nil
-	}
-	return "", errors.New("github: app id or client id is required")
 }
 
 // Job is a queued workflow job that still needs a runner.
@@ -128,10 +113,9 @@ type cachedToken struct {
 
 // AppClient authenticates as a GitHub App installation.
 type AppClient struct {
-	cfg    Config
-	issuer string
-	key    *rsa.PrivateKey
-	now    func() time.Time
+	cfg Config
+	key *rsa.PrivateKey
+	now func() time.Time
 
 	mu     sync.Mutex
 	tokens map[int64]cachedToken
@@ -139,9 +123,8 @@ type AppClient struct {
 
 // NewAppClient loads the App private key and prepares the API client.
 func NewAppClient(cfg Config) (*AppClient, error) {
-	issuer, err := cfg.issuer()
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(cfg.ClientID) == "" {
+		return nil, errors.New("github: client id is required")
 	}
 	key, err := LoadPrivateKey(cfg.PrivateKeyPath)
 	if err != nil {
@@ -149,7 +132,6 @@ func NewAppClient(cfg Config) (*AppClient, error) {
 	}
 	return &AppClient{
 		cfg:    cfg,
-		issuer: issuer,
 		key:    key,
 		now:    time.Now,
 		tokens: make(map[int64]cachedToken),
@@ -292,7 +274,7 @@ func LoadPrivateKey(path string) (*rsa.PrivateKey, error) {
 // minutes, so the claim is kept at nine to absorb clock skew.
 func (c *AppClient) AppJWT(now time.Time) (string, error) {
 	claims := jwt.RegisteredClaims{
-		Issuer:    c.issuer,
+		Issuer:    strings.TrimSpace(c.cfg.ClientID),
 		IssuedAt:  jwt.NewNumericDate(now.Add(-60 * time.Second)),
 		ExpiresAt: jwt.NewNumericDate(now.Add(9 * time.Minute)),
 	}

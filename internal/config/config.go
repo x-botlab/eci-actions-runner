@@ -27,9 +27,8 @@ type Config struct {
 // is installed once per account, and one installation can cover many repos, so
 // repositories are grouped by the installation that authorises them.
 type GitHub struct {
-	AppID int64 `yaml:"app_id"`
-	// ClientID is the OAuth client ID. Set either this or app_id: GitHub accepts
-	// both as the JWT issuer and recommends the client ID.
+	// ClientID is the OAuth client ID, the App's public identifier and the value
+	// GitHub recommends as the JWT issuer.
 	ClientID       string         `yaml:"client_id"`
 	PrivateKeyPath string         `yaml:"private_key_path"`
 	Installations  []Installation `yaml:"installations"`
@@ -189,8 +188,8 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) validateGitHub() error {
-	if c.GitHub.AppID <= 0 && strings.TrimSpace(c.GitHub.ClientID) == "" {
-		return fmt.Errorf("github.app_id or github.client_id is required")
+	if strings.TrimSpace(c.GitHub.ClientID) == "" {
+		return fmt.Errorf("github.client_id is required")
 	}
 	if strings.TrimSpace(c.GitHub.PrivateKeyPath) == "" {
 		return fmt.Errorf("github.private_key_path is required")

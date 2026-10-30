@@ -132,9 +132,9 @@ a healthy long job is killed.
 Secrets stay out of the file: the App private key is mounted from a secret, and
 the Alibaba Cloud credential comes from the instance RAM role.
 
-The App is identified by `github.app_id` (numeric) or `github.client_id` (OAuth
-client ID). GitHub accepts either as the JWT issuer and now recommends the client
-ID; both still require the private key, since the token must be RS256 signed.
+The App is identified by `github.client_id`, the OAuth client ID that GitHub
+recommends as the JWT issuer. It is a public identifier; the App private key is
+what proves identity, since the token must be RS256 signed.
 
 ## Status
 
