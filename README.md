@@ -25,6 +25,7 @@ the next reconcile reads both sides again.
 | [internal/scheduler/](internal/scheduler/) | reconcile loop |
 | [internal/metrics/](internal/metrics/) | Prometheus series that stand in for a UI |
 | [internal/cli/](internal/cli/) | subcommands |
+| [image/](image/) | the runner container image and how to rebuild it |
 | [pools.yaml](pools.yaml) | the configuration, reviewed like code |
 
 ## Shape of the configuration
@@ -147,12 +148,24 @@ Still missing: the `workflow_job` webhook fast path (polling already covers
 correctness, only latency is affected), `logs` (needs the log pipeline) and
 `drain` (needs a runtime override that does not require a new commit).
 
+## The runner image
+
+[image/](image/) builds and publishes the container a job runs in:
+
+```
+registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2
+```
+
+`make image-push` builds and pushes it. The runner version is pinned and must be
+bumped when GitHub releases a new runner, because a JIT runner cannot disable its
+own auto-update; see [image/README.md](image/README.md) for the details and the
+measured layer sizes.
+
 ## Before pointing a real repository at it
 
-- Image: the container starts `/home/runner/run.sh` with the JIT config in
-  `ACTIONS_RUNNER_INPUT_JITCONFIG`. Use an image that also passes
-  `--disableupdate` at configure time, or a runner release will try to self update
-  inside every container.
+- Image: the container reads its one-shot registration from
+  `ACTIONS_RUNNER_INPUT_JITCONFIG`; [image/entrypoint.sh](image/entrypoint.sh)
+  handles that and nothing else.
 - Registry: pull from the ACR instance in the same region as the target, and use
   its VPC endpoint, otherwise image traffic crosses the internet.
 - Network: NAT gateway for egress, no inbound rules, and a fixed egress IP so the

@@ -59,12 +59,11 @@ pools:
   - name: pool-short
     # Ordered: beijing is the fallback when hangzhou is out of stock.
     eci: [hangzhou, beijing]
-    # A container registry endpoint is regional, so each target pulls from its
-    # own ACR instance instead of crossing regions.
+    # A container registry endpoint is regional, so each target pulls from its own
+    # ACR instance. Image names without an override fall back to `image` below.
     images:
-      hangzhou: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:v1
-      beijing: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner:v1
-    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:v1
+      hangzhou: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2
+    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2
     vcpu: 4
     memory_gib: 8
     min: 0
@@ -86,6 +85,7 @@ pools:
     max: 4
     labels:
       - eci-pool-heavy
-    image: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner-heavy:v1
+    # Mirror this tag into the beijing ACR instance before enabling the pool.
+    image: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner:2.338.2
     ttl_minutes: 400
     spot: false
