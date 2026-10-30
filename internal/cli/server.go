@@ -42,6 +42,11 @@ func newServerCmd(configPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// Fail now rather than on the first launch: a missing registry
+			// credential is a deployment mistake, not a runtime condition.
+			if err := validateClouds(clouds); err != nil {
+				return err
+			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()

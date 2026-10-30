@@ -27,6 +27,12 @@ github:
           pools: [pool-short]
 
 eci:
+  # Credentials for private images. The values themselves live in the
+  # environment, so this file can be committed.
+  registries:
+    - server: registry.cn-hangzhou.aliyuncs.com
+      username_env: ECI_ACR_USERNAME
+      password_env: ECI_ACR_PASSWORD
   # One target per region. A pool is placed into exactly one target, so the same
   # label can serve two regions only through two pools.
   targets:

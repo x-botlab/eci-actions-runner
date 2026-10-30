@@ -55,7 +55,19 @@ func (r Repo) FullName() string { return r.Owner + "/" + r.Name }
 // ECI holds the container group targets. One target is one region with its own
 // switches, security group and instance role; pools choose a target by name.
 type ECI struct {
-	Targets []Target `yaml:"targets"`
+	// Registries lists the private registries ECI may need to authenticate
+	// against. Passwords come from the environment, so this file stays free of
+	// secrets even though it is committed.
+	Registries []Registry `yaml:"registries"`
+	Targets    []Target   `yaml:"targets"`
+}
+
+// Registry is one private container registry and the environment variables that
+// carry its credentials.
+type Registry struct {
+	Server      string `yaml:"server"`
+	UsernameEnv string `yaml:"username_env"`
+	PasswordEnv string `yaml:"password_env"`
 }
 
 // Target is one place container groups can be created.
@@ -227,6 +239,22 @@ func (c *Config) validateGitHub() error {
 }
 
 func (c *Config) validateECI() error {
+	seenRegistries := make(map[string]struct{}, len(c.ECI.Registries))
+	for _, registry := range c.ECI.Registries {
+		if strings.TrimSpace(registry.Server) == "" {
+			return fmt.Errorf("eci.registries: server is required")
+		}
+		if strings.Contains(registry.Server, "/") {
+			return fmt.Errorf("eci registry %q: server must be a host, not a URL", registry.Server)
+		}
+		if _, dup := seenRegistries[registry.Server]; dup {
+			return fmt.Errorf("eci registry %q is declared twice", registry.Server)
+		}
+		seenRegistries[registry.Server] = struct{}{}
+		if strings.TrimSpace(registry.UsernameEnv) == "" || strings.TrimSpace(registry.PasswordEnv) == "" {
+			return fmt.Errorf("eci registry %q: username_env and password_env are required", registry.Server)
+		}
+	}
 	if len(c.ECI.Targets) == 0 {
 		return fmt.Errorf("eci.targets must contain at least one target")
 	}

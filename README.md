@@ -137,6 +137,22 @@ The App is identified by `github.client_id`, the OAuth client ID that GitHub
 recommends as the JWT issuer. It is a public identifier; the App private key is
 what proves identity, since the token must be RS256 signed.
 
+Private images need a registry credential, and ECI matches it to the image by
+server. The password is read from the environment at launch time, so the file
+stays committable and a diagnostic verb (`ps`, `gc`) still works when the
+registry password has rotated:
+
+```yaml
+eci:
+  registries:
+    - server: registry.cn-hangzhou.aliyuncs.com
+      username_env: ECI_ACR_USERNAME
+      password_env: ECI_ACR_PASSWORD
+```
+
+`server` subcommand validates those variables at start-up, so a missing one stops
+the process immediately instead of failing the first launch.
+
 ## Status
 
 Working: configuration, repo/pool/target resolution, the reconcile loop, ECI

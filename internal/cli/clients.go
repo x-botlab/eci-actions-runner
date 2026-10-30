@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/x-botlab/eci-actions-runner/internal/config"
 	"github.com/x-botlab/eci-actions-runner/internal/eci"
 	"github.com/x-botlab/eci-actions-runner/internal/github"
@@ -29,6 +31,15 @@ func buildForge(cfg *config.Config) (*github.AppClient, error) {
 
 // buildClouds creates one backend per configured ECI target.
 func buildClouds(cfg *config.Config) (map[string]eci.Backend, error) {
+	registries := make([]eci.Registry, 0, len(cfg.ECI.Registries))
+	for _, registry := range cfg.ECI.Registries {
+		registries = append(registries, eci.Registry{
+			Server:      registry.Server,
+			UsernameEnv: registry.UsernameEnv,
+			PasswordEnv: registry.PasswordEnv,
+		})
+	}
+
 	clouds := make(map[string]eci.Backend, len(cfg.ECI.Targets))
 	for _, target := range cfg.ECI.Targets {
 		client, err := eci.New(eci.Config{
@@ -38,6 +49,7 @@ func buildClouds(cfg *config.Config) (map[string]eci.Backend, error) {
 			VSwitchIDs:      target.VSwitchIDs,
 			SecurityGroupID: target.SecurityGroupID,
 			RAMRoleName:     target.RAMRoleName,
+			Registries:      registries,
 		})
 		if err != nil {
 			return nil, err
@@ -45,4 +57,16 @@ func buildClouds(cfg *config.Config) (map[string]eci.Backend, error) {
 		clouds[target.Name] = client
 	}
 	return clouds, nil
+}
+
+// validateClouds fails when a backend is missing something only discoverable at
+// call time. The server uses it so a bad environment stops the process at
+// start-up; diagnostic verbs skip it so they still work during an incident.
+func validateClouds(clouds map[string]eci.Backend) error {
+	for name, backend := range clouds {
+		if err := backend.Validate(); err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	openapi "github.com/alibabacloud-go/darabonba-openapi/v2/client"
@@ -23,6 +24,34 @@ import (
 // ErrNotImplemented marks behaviour that is still missing.
 var ErrNotImplemented = errors.New("eci: not implemented")
 
+// Registry is one container registry ECI may need to authenticate against. The
+// credentials are read from the environment at launch time, so a diagnostic
+// command still works when a registry password has rotated or is missing.
+type Registry struct {
+	Server      string
+	UsernameEnv string
+	PasswordEnv string
+}
+
+// Matches reports whether image is pulled from this registry. The trailing slash
+// keeps "registry.example.com" from matching "registry.example.com.evil/...".
+func (r Registry) Matches(image string) bool {
+	return r.Server != "" && strings.HasPrefix(image, r.Server+"/")
+}
+
+// credentials reads the username and password for this registry.
+func (r Registry) credentials() (username, password string, err error) {
+	username = strings.TrimSpace(os.Getenv(r.UsernameEnv))
+	if username == "" {
+		return "", "", fmt.Errorf("environment variable %s is required for %s credentials", r.UsernameEnv, r.Server)
+	}
+	password = strings.TrimSpace(os.Getenv(r.PasswordEnv))
+	if password == "" {
+		return "", "", fmt.Errorf("environment variable %s is required for %s credentials", r.PasswordEnv, r.Server)
+	}
+	return username, password, nil
+}
+
 // Config pins the region and network one target creates container groups in.
 // More than one switch lets a launch fall back to another zone when the first
 // one runs out of stock.
@@ -33,6 +62,9 @@ type Config struct {
 	VSwitchIDs      []string
 	SecurityGroupID string
 	RAMRoleName     string
+	// Registries holds the credentials for private images. ECI picks the one
+	// whose server matches the image, so unrelated registries are never sent.
+	Registries []Registry
 }
 
 // Spec is one container group to create: exactly one runner, exactly one job.
@@ -77,6 +109,10 @@ type Backend interface {
 	Launch(ctx context.Context, spec Spec) (string, error)
 	Describe(ctx context.Context, sel Selector) ([]Instance, error)
 	Terminate(ctx context.Context, id string) error
+	// Validate reports configuration that is only discoverable at call time,
+	// such as a registry credential that is not in the environment. It lets the
+	// server fail at start-up instead of during the first launch.
+	Validate() error
 }
 
 // Failure reasons, also used as metric labels.
@@ -259,6 +295,13 @@ func (c *Client) launchIn(ctx context.Context, spec Spec, vswitch string) (strin
 	if c.cfg.RAMRoleName != "" {
 		request.RamRoleName = tea.String(c.cfg.RAMRoleName)
 	}
+	creds, err := c.registryCredentials(spec.Image)
+	if err != nil {
+		return "", err
+	}
+	if len(creds) > 0 {
+		request.ImageRegistryCredential = creds
+	}
 	if spec.TTL > 0 {
 		request.ActiveDeadlineSeconds = tea.Int64(int64(spec.TTL.Seconds()))
 	}
@@ -314,6 +357,38 @@ func (c *Client) Terminate(ctx context.Context, id string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("eci %s: delete %s: %w", c.cfg.Name, id, err)
+	}
+	return nil
+}
+
+// registryCredentials returns the credentials for the registry that hosts image.
+// A public image matches nothing and is pulled anonymously.
+func (c *Client) registryCredentials(image string) ([]*eciclient.CreateContainerGroupRequestImageRegistryCredential, error) {
+	var creds []*eciclient.CreateContainerGroupRequestImageRegistryCredential
+	for _, registry := range c.cfg.Registries {
+		if !registry.Matches(image) {
+			continue
+		}
+		username, password, err := registry.credentials()
+		if err != nil {
+			return nil, err
+		}
+		creds = append(creds, &eciclient.CreateContainerGroupRequestImageRegistryCredential{
+			Server:   tea.String(registry.Server),
+			UserName: tea.String(username),
+			Password: tea.String(password),
+		})
+	}
+	return creds, nil
+}
+
+// Validate checks that every configured registry has credentials in the
+// environment, so a missing variable fails at start-up rather than mid-launch.
+func (c *Client) Validate() error {
+	for _, registry := range c.cfg.Registries {
+		if _, _, err := registry.credentials(); err != nil {
+			return fmt.Errorf("eci %q: %w", c.cfg.Name, err)
+		}
 	}
 	return nil
 }

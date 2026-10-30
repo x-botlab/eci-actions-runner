@@ -27,6 +27,7 @@ type fakeBackend struct {
 	instances   []eci.Instance
 	describeErr error
 	terminated  []string
+	validateErr error
 }
 
 func (f *fakeBackend) Launch(_ context.Context, spec eci.Spec) (string, error) {
@@ -59,6 +60,8 @@ func (f *fakeBackend) Terminate(_ context.Context, id string) error {
 	f.terminated = append(f.terminated, id)
 	return nil
 }
+
+func (f *fakeBackend) Validate() error { return f.validateErr }
 
 // fakeForge stands in for GitHub: the queue, the JIT configs and the registry.
 type fakeForge struct {

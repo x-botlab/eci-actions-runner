@@ -159,6 +159,46 @@ pools:
     ttl_minutes: 380
 `
 
+func TestValidateRejectsIncompleteRegistry(t *testing.T) {
+	body := strings.Replace(minimal, "eci:\n", `
+eci:
+  registries:
+    - server: registry.example.com
+      username_env: ACR_USER
+`, 1)
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "username_env and password_env") {
+		t.Fatalf("expected a registry credential error, got %v", err)
+	}
+}
+
+func TestValidateRejectsRegistryURL(t *testing.T) {
+	body := strings.Replace(minimal, "eci:\n", `
+eci:
+  registries:
+    - server: https://registry.example.com
+      username_env: ACR_USER
+      password_env: ACR_PASS
+`, 1)
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "must be a host") {
+		t.Fatalf("expected a server-shape error, got %v", err)
+	}
+}
+
+func TestValidateAcceptsRegistries(t *testing.T) {
+	body := strings.Replace(minimal, "eci:\n", `
+eci:
+  registries:
+    - server: registry.example.com
+      username_env: ACR_USER
+      password_env: ACR_PASS
+`, 1)
+	if _, err := Load(writeConfig(t, body)); err != nil {
+		t.Fatalf("expected a complete registry to be accepted: %v", err)
+	}
+}
+
 func TestValidateRequiresClientID(t *testing.T) {
 	body := strings.Replace(minimal, "  client_id: Iv1.minimal\n", "", 1)
 	_, err := Load(writeConfig(t, body))
