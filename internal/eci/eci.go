@@ -12,6 +12,7 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -219,6 +220,13 @@ const (
 	tagTarget    = "target"
 
 	managedByValue = "eci-actions-runner"
+
+	resourceTypeContainerGroup = "ContainerGroup"
+
+	// maxDescribeIDs bounds one DescribeContainerGroups call.
+	maxDescribeIDs = 20
+	// maxTagPageSize is the largest page ListTagResources accepts.
+	maxTagPageSize = 20
 )
 
 // Instance states, grouped by whether the container group can still take a job.
@@ -247,13 +255,6 @@ func (i Instance) Terminal() bool {
 // turn, because they sit in different zones of the same region and a stock out in
 // one zone should not fail the launch.
 func (c *Client) Launch(ctx context.Context, spec Spec) (string, error) {
-	if spec.Name == "" {
-		return "", errors.New("eci: container group name is required")
-	}
-	if spec.Image == "" {
-		return "", errors.New("eci: image is required")
-	}
-
 	var lastErr error
 	for _, vswitch := range c.cfg.VSwitchIDs {
 		id, err := c.launchIn(ctx, spec, vswitch)
@@ -272,7 +273,40 @@ func (c *Client) Launch(ctx context.Context, spec Spec) (string, error) {
 }
 
 func (c *Client) launchIn(ctx context.Context, spec Spec, vswitch string) (string, error) {
+	request, err := c.launchRequest(spec, vswitch)
+	if err != nil {
+		return "", err
+	}
+
+	response, err := c.api.CreateContainerGroup(request)
+	if err != nil {
+		return "", fmt.Errorf("eci %s: create %s: %w", c.cfg.Name, spec.Name, err)
+	}
+	if response.Body == nil || response.Body.ContainerGroupId == nil {
+		return "", fmt.Errorf("eci %s: create %s returned no container group id", c.cfg.Name, spec.Name)
+	}
+	return *response.Body.ContainerGroupId, nil
+}
+
+// launchRequest builds the create request. It is separate from the call so the
+// request can be asserted without a network round trip: RegionId in particular
+// has to be in the request body, not only in the client config, or the API
+// answers MissingRegionId.
+func (c *Client) launchRequest(spec Spec, vswitch string) (*eciclient.CreateContainerGroupRequest, error) {
+	if spec.Name == "" {
+		return nil, errors.New("eci: container group name is required")
+	}
+	if spec.Image == "" {
+		return nil, errors.New("eci: image is required")
+	}
+
+	creds, err := c.registryCredentials(spec.Image)
+	if err != nil {
+		return nil, err
+	}
+
 	request := &eciclient.CreateContainerGroupRequest{
+		RegionId: tea.String(c.cfg.RegionID),
 		// The client token makes the call idempotent, so a retried launch returns
 		// the same container group instead of creating a second one.
 		ClientToken:         tea.String(clientToken(spec.Name)),
@@ -295,10 +329,6 @@ func (c *Client) launchIn(ctx context.Context, spec Spec, vswitch string) (strin
 	if c.cfg.RAMRoleName != "" {
 		request.RamRoleName = tea.String(c.cfg.RAMRoleName)
 	}
-	creds, err := c.registryCredentials(spec.Image)
-	if err != nil {
-		return "", err
-	}
 	if len(creds) > 0 {
 		request.ImageRegistryCredential = creds
 	}
@@ -308,50 +338,101 @@ func (c *Client) launchIn(ctx context.Context, spec Spec, vswitch string) (strin
 	if spec.Spot {
 		request.SpotStrategy = tea.String("SpotAsPriceGo")
 	}
-
-	response, err := c.api.CreateContainerGroup(request)
-	if err != nil {
-		return "", fmt.Errorf("eci %s: create %s: %w", c.cfg.Name, spec.Name, err)
-	}
-	if response.Body == nil || response.Body.ContainerGroupId == nil {
-		return "", fmt.Errorf("eci %s: create %s returned no container group id", c.cfg.Name, spec.Name)
-	}
-	return *response.Body.ContainerGroupId, nil
+	return request, nil
 }
 
-// Describe lists the container groups matching sel, following pagination.
+// Describe lists the container groups matching sel. ECI has no "list by tag"
+// call: DescribeContainerGroups insists on explicit ids, so the ids come from
+// ListTagResources first. Both steps are needed, and both are read-only.
 func (c *Client) Describe(ctx context.Context, sel Selector) ([]Instance, error) {
+	ids, err := c.listTagged(ctx, sel)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
 	var instances []Instance
+	// The describe call accepts a bounded id list per request.
+	for chunk := range slices.Chunk(ids, maxDescribeIDs) {
+		groups, err := c.describeByIDs(ctx, chunk)
+		if err != nil {
+			return nil, err
+		}
+		instances = append(instances, groups...)
+	}
+	return instances, nil
+}
+
+// listTagged returns the ids of the container groups carrying our tags. The
+// managed-by tag is always applied, so a container group this tool did not create
+// is never adopted.
+func (c *Client) listTagged(ctx context.Context, sel Selector) ([]string, error) {
+	var ids []string
+	seen := make(map[string]struct{})
 	var nextToken *string
+
 	for {
-		response, err := c.api.DescribeContainerGroups(&eciclient.DescribeContainerGroupsRequest{
-			Limit:     tea.Int32(100),
-			NextToken: nextToken,
-			Tag:       selectorTags(sel, c.cfg.Name),
+		response, err := c.api.ListTagResources(&eciclient.ListTagResourcesRequest{
+			RegionId:     tea.String(c.cfg.RegionID),
+			ResourceType: tea.String(resourceTypeContainerGroup),
+			Tag:          listTagFilter(sel, c.cfg.Name),
+			Limit:        tea.String(strconv.Itoa(maxTagPageSize)),
+			NextToken:    nextToken,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("eci %s: describe: %w", c.cfg.Name, err)
+			return nil, fmt.Errorf("eci %s: list tagged resources: %w", c.cfg.Name, err)
 		}
 		if response.Body == nil {
-			return instances, nil
+			return ids, nil
 		}
 
-		for _, group := range response.Body.ContainerGroups {
-			instances = append(instances, toInstance(group, c.cfg.Name))
+		for _, resource := range response.Body.TagResources {
+			if resource == nil || resource.ResourceId == nil {
+				continue
+			}
+			if _, dup := seen[*resource.ResourceId]; dup {
+				continue
+			}
+			seen[*resource.ResourceId] = struct{}{}
+			ids = append(ids, *resource.ResourceId)
 		}
 
 		// A repeated token would loop forever, so stop unless it advances.
 		token := response.Body.NextToken
 		if token == nil || *token == "" || (nextToken != nil && *token == *nextToken) {
-			return instances, nil
+			return ids, nil
 		}
 		nextToken = token
 	}
 }
 
+// describeByIDs fetches the detail for one bounded batch of ids.
+func (c *Client) describeByIDs(ctx context.Context, ids []string) ([]Instance, error) {
+	response, err := c.api.DescribeContainerGroups(&eciclient.DescribeContainerGroupsRequest{
+		RegionId:          tea.String(c.cfg.RegionID),
+		ContainerGroupIds: tea.String(strings.Join(ids, ",")),
+		Limit:             tea.Int32(int32(maxDescribeIDs)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("eci %s: describe: %w", c.cfg.Name, err)
+	}
+	if response.Body == nil {
+		return nil, nil
+	}
+
+	instances := make([]Instance, 0, len(response.Body.ContainerGroups))
+	for _, group := range response.Body.ContainerGroups {
+		instances = append(instances, toInstance(group, c.cfg.Name))
+	}
+	return instances, nil
+}
+
 // Terminate deletes one container group.
 func (c *Client) Terminate(ctx context.Context, id string) error {
 	_, err := c.api.DeleteContainerGroup(&eciclient.DeleteContainerGroupRequest{
+		RegionId:         tea.String(c.cfg.RegionID),
 		ContainerGroupId: tea.String(id),
 		ClientToken:      tea.String(clientToken("delete:" + id)),
 	})
@@ -432,16 +513,10 @@ func tags(spec Spec, target string) []*eciclient.CreateContainerGroupRequestTag 
 	return out
 }
 
+// selectorTags is the tag filter for DescribeContainerGroups.
 func selectorTags(sel Selector, target string) []*eciclient.DescribeContainerGroupsRequestTag {
-	list := []struct{ key, value string }{
-		{tagManagedBy, managedByValue},
-		{tagPool, sel.Pool},
-		{tagRepo, sel.Repo},
-		{tagJob, sel.JobID},
-		{tagTarget, target},
-	}
-	out := make([]*eciclient.DescribeContainerGroupsRequestTag, 0, len(list))
-	for _, entry := range list {
+	out := make([]*eciclient.DescribeContainerGroupsRequestTag, 0, 5)
+	for _, entry := range selectorEntries(sel, target) {
 		if entry.value == "" {
 			continue
 		}
@@ -451,6 +526,32 @@ func selectorTags(sel Selector, target string) []*eciclient.DescribeContainerGro
 		})
 	}
 	return out
+}
+
+// listTagFilter is the same filter for ListTagResources.
+func listTagFilter(sel Selector, target string) []*eciclient.ListTagResourcesRequestTag {
+	out := make([]*eciclient.ListTagResourcesRequestTag, 0, 5)
+	for _, entry := range selectorEntries(sel, target) {
+		if entry.value == "" {
+			continue
+		}
+		out = append(out, &eciclient.ListTagResourcesRequestTag{
+			Key:   tea.String(entry.key),
+			Value: tea.String(entry.value),
+		})
+	}
+	return out
+}
+
+// selectorEntries is the one definition of "which container groups are ours".
+func selectorEntries(sel Selector, target string) []struct{ key, value string } {
+	return []struct{ key, value string }{
+		{tagManagedBy, managedByValue},
+		{tagPool, sel.Pool},
+		{tagRepo, sel.Repo},
+		{tagJob, sel.JobID},
+		{tagTarget, target},
+	}
 }
 
 func toInstance(group *eciclient.DescribeContainerGroupsResponseBodyContainerGroups, target string) Instance {

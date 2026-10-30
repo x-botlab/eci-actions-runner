@@ -180,6 +180,84 @@ func TestValidateReportsMissingCredential(t *testing.T) {
 	}
 }
 
+// Regression: RegionId belongs in the request body. Sending it only on the client
+// config makes the API answer MissingRegionId.
+func TestLaunchRequestCarriesRegionAndShape(t *testing.T) {
+	t.Setenv("TEST_ACR_USER", "u")
+	t.Setenv("TEST_ACR_PASS", "p")
+
+	client := &Client{cfg: Config{
+		Name:            "hongkong",
+		RegionID:        "cn-hongkong",
+		VSwitchIDs:      []string{"vsw-1"},
+		SecurityGroupID: "sg-1",
+		RAMRoleName:     "eci-runner-self-delete",
+		Registries: []Registry{{
+			Server: "registry.cn-hangzhou.aliyuncs.com", UsernameEnv: "TEST_ACR_USER", PasswordEnv: "TEST_ACR_PASS",
+		}},
+	}}
+
+	spec := Spec{
+		Name:      "eci-pool-short-abc",
+		Pool:      "pool-short",
+		Repo:      "o/r",
+		JobID:     "42",
+		VCPU:      4,
+		MemoryGiB: 8,
+		Image:     "registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2",
+		Env:       map[string]string{EnvJITConfig: "encoded"},
+		TTL:       90 * time.Minute,
+	}
+
+	request, err := client.launchRequest(spec, "vsw-1")
+	if err != nil {
+		t.Fatalf("launch request: %v", err)
+	}
+
+	if got := *request.RegionId; got != "cn-hongkong" {
+		t.Fatalf("RegionId = %q, want cn-hongkong", got)
+	}
+	if got := *request.VSwitchId; got != "vsw-1" {
+		t.Fatalf("VSwitchId = %q", got)
+	}
+	if got := *request.SecurityGroupId; got != "sg-1" {
+		t.Fatalf("SecurityGroupId = %q", got)
+	}
+	if *request.Cpu != 4 || *request.Memory != 8 {
+		t.Fatalf("shape = %v/%v", *request.Cpu, *request.Memory)
+	}
+	if got := *request.RestartPolicy; got != "Never" {
+		t.Fatalf("RestartPolicy = %q", got)
+	}
+	if got := *request.ActiveDeadlineSeconds; got != 5400 {
+		t.Fatalf("ActiveDeadlineSeconds = %d", got)
+	}
+	if len(request.ImageRegistryCredential) != 1 {
+		t.Fatalf("credentials = %d, want 1", len(request.ImageRegistryCredential))
+	}
+	if len(request.Container) != 1 {
+		t.Fatalf("containers = %d, want 1", len(request.Container))
+	}
+	container := request.Container[0]
+	if *container.Image != spec.Image || *container.Command[0] != runnerEntrypoint {
+		t.Fatalf("container = %q cmd %q", *container.Image, *container.Command[0])
+	}
+	if len(container.EnvironmentVar) != 1 || *container.EnvironmentVar[0].Key != EnvJITConfig {
+		t.Fatalf("env = %+v", container.EnvironmentVar)
+	}
+}
+
+func TestLaunchRequestRejectsIncompleteSpec(t *testing.T) {
+	client := &Client{cfg: Config{RegionID: "cn-hongkong"}}
+
+	if _, err := client.launchRequest(Spec{Image: "x"}, "vsw-1"); err == nil {
+		t.Fatal("expected a missing name error")
+	}
+	if _, err := client.launchRequest(Spec{Name: "x"}, "vsw-1"); err == nil {
+		t.Fatal("expected a missing image error")
+	}
+}
+
 func TestNewRejectsIncompleteTarget(t *testing.T) {
 	if _, err := New(Config{Name: "hangzhou"}); err == nil {
 		t.Fatal("expected a region error")

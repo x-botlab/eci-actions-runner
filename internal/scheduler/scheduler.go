@@ -402,11 +402,13 @@ func runnerName(poolName string) string {
 	return RunnerNamePrefix(poolName) + hex.EncodeToString(buf)
 }
 
-// launch walks a binding's targets in preference order and returns the instance
-// id together with the target that accepted it. A stock out or a throttle in one
-// zone moves on to the next target; anything else stops the walk, because a bad
-// credential or a missing image fails in every region.
-func (s *Scheduler) launch(ctx context.Context, binding config.Binding, spec eci.Spec) (instanceID, target string, err error) {
+// LaunchOne walks a binding's targets in preference order and returns the
+// instance id together with the target that accepted it. A stock out or a
+// throttle in one zone moves on to the next target; anything else stops the walk,
+// because a bad credential or a missing image fails in every region.
+//
+// It is exported so a smoke test can reuse the exact production path.
+func LaunchOne(ctx context.Context, clouds map[string]eci.Backend, binding config.Binding, spec eci.Spec, logger *slog.Logger, m *metrics.Metrics) (instanceID, target string, err error) {
 	if spec.Pool == "" {
 		spec.Pool = binding.Pool.Name
 	}
@@ -416,7 +418,7 @@ func (s *Scheduler) launch(ctx context.Context, binding config.Binding, spec eci
 
 	var lastErr error
 	for _, candidate := range binding.Targets {
-		backend, ok := s.deps.Clouds[candidate.Name]
+		backend, ok := clouds[candidate.Name]
 		if !ok {
 			lastErr = fmt.Errorf("eci target %q has no backend", candidate.Name)
 			continue
@@ -428,13 +430,14 @@ func (s *Scheduler) launch(ctx context.Context, binding config.Binding, spec eci
 			return id, candidate.Name, nil
 		}
 
-		s.deps.Metrics.CreateFailures.
-			WithLabelValues(spec.Repo, spec.Pool, eci.FailureReason(launchErr)).Inc()
+		if m != nil {
+			m.CreateFailures.WithLabelValues(spec.Repo, spec.Pool, eci.FailureReason(launchErr)).Inc()
+		}
 		if !eci.IsCapacityError(launchErr) {
 			return "", "", fmt.Errorf("target %s: %w", candidate.Name, launchErr)
 		}
 
-		s.deps.Logger.Warn("no capacity in target, trying the next one",
+		logger.Warn("no capacity in target, trying the next one",
 			"repo", spec.Repo, "pool", spec.Pool, "target", candidate.Name, "err", launchErr)
 		lastErr = launchErr
 	}
@@ -443,4 +446,9 @@ func (s *Scheduler) launch(ctx context.Context, binding config.Binding, spec eci
 		lastErr = errors.New("pool lists no eci targets")
 	}
 	return "", "", fmt.Errorf("pool %s: no target accepted the instance: %w", spec.Pool, lastErr)
+}
+
+// launch is the scheduler's view of LaunchOne.
+func (s *Scheduler) launch(ctx context.Context, binding config.Binding, spec eci.Spec) (string, string, error) {
+	return LaunchOne(ctx, s.deps.Clouds, binding, spec, s.deps.Logger, s.deps.Metrics)
 }
