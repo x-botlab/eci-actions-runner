@@ -308,7 +308,7 @@ func TestWithRetryRecoversFromTransientError(t *testing.T) {
 }
 
 func TestLaunchRequestSetsEIPWhenTargetAsks(t *testing.T) {
-	client := &Client{cfg: Config{RegionID: "cn-hongkong", AutoCreateEIP: true, EIPBandwidth: 20}}
+	client := &Client{cfg: Config{RegionID: "cn-hongkong", AutoCreateEIP: true, EIPBandwidth: 200, EIPISP: "BGP_PRO"}}
 	spec := Spec{Name: "n", Image: "docker.io/library/ubuntu:24.04"}
 
 	request, err := client.launchRequest(spec, "vsw-1")
@@ -318,8 +318,11 @@ func TestLaunchRequestSetsEIPWhenTargetAsks(t *testing.T) {
 	if request.AutoCreateEip == nil || !*request.AutoCreateEip {
 		t.Fatal("expected AutoCreateEip to be set")
 	}
-	if request.EipBandwidth == nil || *request.EipBandwidth != 20 {
-		t.Fatalf("EipBandwidth = %v, want 20", request.EipBandwidth)
+	if request.EipBandwidth == nil || *request.EipBandwidth != 200 {
+		t.Fatalf("EipBandwidth = %v, want 200", request.EipBandwidth)
+	}
+	if request.EipISP == nil || *request.EipISP != "BGP_PRO" {
+		t.Fatalf("EipISP = %v, want BGP_PRO", request.EipISP)
 	}
 
 	plain := &Client{cfg: Config{RegionID: "cn-hongkong"}}
@@ -327,7 +330,7 @@ func TestLaunchRequestSetsEIPWhenTargetAsks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("launch request: %v", err)
 	}
-	if request.AutoCreateEip != nil {
+	if request.AutoCreateEip != nil || request.EipISP != nil {
 		t.Fatal("a target without auto_create_eip must not request a public IP")
 	}
 }

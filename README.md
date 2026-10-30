@@ -165,8 +165,14 @@ eci:
       vswitch_ids: [vsw-xxx]
       security_group_id: sg-xxx
       auto_create_eip: true
-      eip_bandwidth: 20
+      eip_bandwidth: 200   # Mbit/s
+      eip_isp: BGP_PRO     # premium line; BGP is the default
 ```
+
+`eip_bandwidth` and `eip_isp` without `auto_create_eip` are rejected, because the
+setting would silently do nothing. Both were verified against the created
+resource, not just accepted by the API: it reports `ISP=BGP_PRO`,
+`Bandwidth=200`, `InternetChargeType=PayByTraffic`.
 
 ## Verifying a deployment without a workflow
 

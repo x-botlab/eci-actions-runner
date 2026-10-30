@@ -70,6 +70,9 @@ type Config struct {
 	AutoCreateEIP bool
 	// EIPBandwidth is the public bandwidth in Mbit/s. ECI defaults to 5.
 	EIPBandwidth int32
+	// EIPISP selects the line type: BGP or BGP_PRO (premium). Empty keeps the
+	// ECI default.
+	EIPISP string
 	// Registries holds the credentials for private images. ECI picks the one
 	// whose server matches the image, so unrelated registries are never sent.
 	Registries []Registry
@@ -362,6 +365,9 @@ func (c *Client) launchRequest(spec Spec, vswitch string) (*eciclient.CreateCont
 		request.AutoCreateEip = tea.Bool(true)
 		if c.cfg.EIPBandwidth > 0 {
 			request.EipBandwidth = tea.Int32(c.cfg.EIPBandwidth)
+		}
+		if c.cfg.EIPISP != "" {
+			request.EipISP = tea.String(c.cfg.EIPISP)
 		}
 	}
 	return request, nil

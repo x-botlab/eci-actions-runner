@@ -51,6 +51,7 @@ func buildClouds(cfg *config.Config) (map[string]eci.Backend, error) {
 			RAMRoleName:     target.RAMRoleName,
 			AutoCreateEIP:   target.AutoCreateEIP,
 			EIPBandwidth:    target.EIPBandwidth,
+			EIPISP:          target.EIPISP,
 			Registries:      registries,
 		})
 		if err != nil {

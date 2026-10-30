@@ -209,9 +209,27 @@ func TestValidateRejectsBandwidthWithoutEIP(t *testing.T) {
 
 func TestValidateAcceptsEIP(t *testing.T) {
 	body := strings.Replace(minimal, "      security_group_id: sg-1\n",
-		"      security_group_id: sg-1\n      auto_create_eip: true\n      eip_bandwidth: 20\n", 1)
+		"      security_group_id: sg-1\n      auto_create_eip: true\n      eip_bandwidth: 200\n      eip_isp: BGP_PRO\n", 1)
 	if _, err := Load(writeConfig(t, body)); err != nil {
 		t.Fatalf("expected eip settings to be accepted: %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownEIPISP(t *testing.T) {
+	body := strings.Replace(minimal, "      security_group_id: sg-1\n",
+		"      security_group_id: sg-1\n      auto_create_eip: true\n      eip_isp: PREMIUM\n", 1)
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "not BGP or BGP_PRO") {
+		t.Fatalf("expected an isp error, got %v", err)
+	}
+}
+
+func TestValidateRejectsEIPISPWithoutEIP(t *testing.T) {
+	body := strings.Replace(minimal, "      security_group_id: sg-1\n",
+		"      security_group_id: sg-1\n      eip_isp: BGP_PRO\n", 1)
+	_, err := Load(writeConfig(t, body))
+	if err == nil || !strings.Contains(err.Error(), "auto_create_eip is false") {
+		t.Fatalf("expected an eip/isp mismatch error, got %v", err)
 	}
 }
 

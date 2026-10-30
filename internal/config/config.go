@@ -91,6 +91,8 @@ type Target struct {
 	AutoCreateEIP bool `yaml:"auto_create_eip"`
 	// EIPBandwidth is the public bandwidth in Mbit/s, default 5.
 	EIPBandwidth int32 `yaml:"eip_bandwidth"`
+	// EIPISP is the public line type: BGP or BGP_PRO (premium).
+	EIPISP string `yaml:"eip_isp"`
 }
 
 // Binding is one schedulable unit: a repository, the pool serving it and the
@@ -297,6 +299,14 @@ func (c *Config) validateECI() error {
 		}
 		if t.EIPBandwidth > 0 && !t.AutoCreateEIP {
 			return fmt.Errorf("eci target %q: eip_bandwidth is set but auto_create_eip is false", t.Name)
+		}
+		if t.EIPISP != "" {
+			if !t.AutoCreateEIP {
+				return fmt.Errorf("eci target %q: eip_isp is set but auto_create_eip is false", t.Name)
+			}
+			if t.EIPISP != "BGP" && t.EIPISP != "BGP_PRO" {
+				return fmt.Errorf("eci target %q: eip_isp %q is not BGP or BGP_PRO", t.Name, t.EIPISP)
+			}
 		}
 	}
 	return nil
