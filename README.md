@@ -195,6 +195,18 @@ deleted         eci-j6cgd9jq3tmgyyaqc5zq
 config was accepted, and the container group can reach github.com. Everything
 before it only proves the container booted.
 
+## Labels: a JIT runner gets only what you send
+
+A normally registered runner receives `self-hosted`, `linux` and `x64` during
+`config.sh`. A JIT registration has no such step, so those labels must be in the
+API request or the runner comes online and stays idle while
+`runs-on: [self-hosted, ...]` matches nothing. The scheduler always merges them
+in, and a pool label may repeat them harmlessly.
+
+The flip side is that `runs-on` is an AND: a job asking for a label no runner
+carries stays queued rather than failing, so watch `eci_runner_queued_jobs`
+rather than the job page.
+
 ## Status
 
 Working: configuration, repo/pool/target resolution, the reconcile loop, ECI
