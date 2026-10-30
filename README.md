@@ -18,7 +18,7 @@ the next reconcile reads both sides again.
 | Path | Purpose |
 | --- | --- |
 | [cmd/eci-runner/](cmd/eci-runner/) | entry point |
-| [internal/config/](internal/config/) | configuration loading and validation |
+| [internal/config/](internal/config/) | configuration loading, validation and repo/pool/target resolution |
 | [internal/pool/](internal/pool/) | pool definitions, sizing and label matching |
 | [internal/github/](internal/github/) | App JWT, JIT configs, queued jobs, runner registry |
 | [internal/eci/](internal/eci/) | ECI launch, describe and terminate behind `Backend` |
@@ -27,11 +27,33 @@ the next reconcile reads both sides again.
 | [internal/cli/](internal/cli/) | subcommands |
 | [pools.yaml](pools.yaml) | the configuration, reviewed like code |
 
+## Shape of the configuration
+
+Three collections, each a first-class entity:
+
+- **installations → repos**: an App installation authorises a set of
+  repositories. Tokens are cached per installation, so repos are grouped by the
+  installation that can mint for them. A repository may appear under exactly one
+  installation.
+- **eci.targets**: one target is one region with its own switches, security group
+  and instance role.
+- **pools**: a pool names exactly one target, so the same label can serve two
+  regions only through two pools.
+
+The scheduler then works on **bindings**, one per `(repo, pool)` pair — that unit
+matters because a repository scoped runner can only serve its own repository. A
+repo without a `pools` list receives every pool, so a new repo never silently
+misses a pool that already exists.
+
+Labels must be unique among the pools a repo binds, and no stricter: two repos
+may reuse `eci-pool-short` for different shapes, since their runners never mix.
+
 ## Usage
 
 ```console
 $ go build ./cmd/eci-runner
 $ ./eci-runner --config pools.yaml config check
+$ ./eci-runner --config pools.yaml repo ls
 $ ./eci-runner --config pools.yaml pool ls
 $ ./eci-runner --config pools.yaml server --metrics-addr :9090
 ```

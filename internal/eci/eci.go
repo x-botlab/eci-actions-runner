@@ -1,5 +1,6 @@
 // Package eci wraps the Alibaba Cloud ECI OpenAPI behind a small interface so
-// the scheduler can be exercised against a fake during tests.
+// the scheduler can be exercised against a fake during tests. One Client is one
+// ECI target: a region, a set of switches and one security group.
 package eci
 
 import (
@@ -18,11 +19,14 @@ import (
 // ErrNotImplemented marks behaviour the scaffold deliberately leaves out.
 var ErrNotImplemented = errors.New("eci: not implemented")
 
-// Config pins the region and network every container group is created in.
+// Config pins the region and network one target creates container groups in.
+// More than one switch lets a launch fall back to another zone when the first
+// one runs out of stock.
 type Config struct {
+	Name            string
 	RegionID        string
 	Endpoint        string
-	VSwitchID       string
+	VSwitchIDs      []string
 	SecurityGroupID string
 	RAMRoleName     string
 }
@@ -31,6 +35,7 @@ type Config struct {
 type Spec struct {
 	Name      string
 	Pool      string
+	Repo      string
 	JobID     string
 	VCPU      float32
 	MemoryGiB float32
@@ -48,13 +53,15 @@ type Instance struct {
 	Name      string
 	Status    string
 	Pool      string
+	Repo      string
 	JobID     string
 	CreatedAt time.Time
 }
 
-// Selector filters instances by their tags.
+// Selector filters instances by their tags. Empty fields match everything.
 type Selector struct {
 	Pool  string
+	Repo  string
 	JobID string
 }
 
@@ -71,12 +78,15 @@ type Client struct {
 	cfg Config
 }
 
-// New builds an ECI client. On ECI or ECS the instance RAM role is preferred so
-// that no static access key has to be stored anywhere; an env-provided key pair
-// is accepted for local development only.
+// New builds an ECI client for one target. On ECI or ECS the instance RAM role
+// is preferred so that no static access key has to be stored anywhere; an
+// env-provided key pair is accepted for local development only.
 func New(cfg Config) (*Client, error) {
 	if cfg.RegionID == "" {
-		return nil, errors.New("eci: region is required")
+		return nil, fmt.Errorf("eci %q: region is required", cfg.Name)
+	}
+	if len(cfg.VSwitchIDs) == 0 {
+		return nil, fmt.Errorf("eci %q: at least one vswitch is required", cfg.Name)
 	}
 
 	credCfg := &credentials.Config{Type: tea.String("ecs_ram_role")}
@@ -90,7 +100,7 @@ func New(cfg Config) (*Client, error) {
 	}
 	cred, err := credentials.NewCredential(credCfg)
 	if err != nil {
-		return nil, fmt.Errorf("eci: build credential: %w", err)
+		return nil, fmt.Errorf("eci %q: build credential: %w", cfg.Name, err)
 	}
 
 	endpoint := cfg.Endpoint
@@ -103,7 +113,7 @@ func New(cfg Config) (*Client, error) {
 		RegionId:   tea.String(cfg.RegionID),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("eci: new client: %w", err)
+		return nil, fmt.Errorf("eci %q: new client: %w", cfg.Name, err)
 	}
 
 	return &Client{api: api, cfg: cfg}, nil

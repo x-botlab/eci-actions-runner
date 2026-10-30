@@ -32,6 +32,7 @@ func newRootCmd() *cobra.Command {
 		newServerCmd(&configPath),
 		newConfigCmd(&configPath),
 		newPoolCmd(&configPath),
+		newRepoCmd(&configPath),
 		newPSCmd(&configPath),
 		newGCCmd(&configPath),
 		newLogsCmd(&configPath),

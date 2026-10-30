@@ -9,19 +9,20 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/x-botlab/eci-actions-runner/internal/config"
 	"github.com/x-botlab/eci-actions-runner/internal/eci"
 	"github.com/x-botlab/eci-actions-runner/internal/github"
 	"github.com/x-botlab/eci-actions-runner/internal/metrics"
-	"github.com/x-botlab/eci-actions-runner/internal/pool"
 )
 
 var errNotImplemented = errors.New("scheduler: reconcile not implemented")
 
 // Deps are the collaborators the scheduler needs.
 type Deps struct {
-	Forge    github.Forge
-	Cloud    eci.Backend
-	Pools    []pool.Spec
+	Forge github.Forge
+	// Clouds is keyed by ECI target name, so a binding can land in any region.
+	Clouds   map[string]eci.Backend
+	Bindings []config.Binding
 	Interval time.Duration
 	Logger   *slog.Logger
 	Metrics  *metrics.Metrics
@@ -55,7 +56,8 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 	s.deps.Logger.Info("scheduler started",
 		"interval", s.deps.Interval.String(),
-		"pools", len(s.deps.Pools),
+		"bindings", len(s.deps.Bindings),
+		"targets", len(s.deps.Clouds),
 	)
 
 	for {

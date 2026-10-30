@@ -11,16 +11,18 @@ import (
 // Spec is one runner pool as declared in the configuration file. A pool maps a
 // set of runner labels onto a single ECI shape (vCPU/memory/image).
 type Spec struct {
-	Name       string   `yaml:"name" json:"name"`
-	VCPU       float32  `yaml:"vcpu" json:"vcpu"`
-	MemoryGiB  float32  `yaml:"memory_gib" json:"memory_gib"`
-	Min        int      `yaml:"min" json:"min"`
-	Warm       int      `yaml:"warm" json:"warm"`
-	Max        int      `yaml:"max" json:"max"`
-	Labels     []string `yaml:"labels" json:"labels"`
-	Image      string   `yaml:"image" json:"image"`
-	TTLMinutes int      `yaml:"ttl_minutes" json:"ttl_minutes"`
-	Spot       bool     `yaml:"spot" json:"spot"`
+	Name      string   `yaml:"name" json:"name"`
+	VCPU      float32  `yaml:"vcpu" json:"vcpu"`
+	MemoryGiB float32  `yaml:"memory_gib" json:"memory_gib"`
+	Min       int      `yaml:"min" json:"min"`
+	Warm      int      `yaml:"warm" json:"warm"`
+	Max       int      `yaml:"max" json:"max"`
+	Labels    []string `yaml:"labels" json:"labels"`
+	// ECI names the target this pool creates container groups in.
+	ECI        string `yaml:"eci" json:"eci"`
+	Image      string `yaml:"image" json:"image"`
+	TTLMinutes int    `yaml:"ttl_minutes" json:"ttl_minutes"`
+	Spot       bool   `yaml:"spot" json:"spot"`
 }
 
 // Desired returns how many instances the pool should hold for a queue depth.
@@ -62,6 +64,8 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("pool %q: warm (%d) exceeds max (%d)", s.Name, s.Warm, s.Max)
 	case len(s.Labels) == 0:
 		return fmt.Errorf("pool %q: at least one label is required", s.Name)
+	case strings.TrimSpace(s.ECI) == "":
+		return fmt.Errorf("pool %q: eci target is required", s.Name)
 	case strings.TrimSpace(s.Image) == "":
 		return fmt.Errorf("pool %q: image is required", s.Name)
 	case s.TTLMinutes <= 0:

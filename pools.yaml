@@ -5,20 +5,47 @@
 
 github:
   app_id: 100000
-  installation_id: 10000000
   private_key_path: /etc/eci-runner/app.pem
-  owner: x-botlab
-  repo: eci-actions-runner
+  # One installation per account the App is installed on. Every repo carries the
+  # installation that must mint its runner tokens.
+  installations:
+    - id: 10000000
+      repos:
+        # pools is optional; leaving it out gives the repo every pool, so a repo
+        # never silently misses a pool that already exists.
+        - owner: x-botlab
+          name: eci-actions-runner
+          pools: [pool-short, pool-heavy]
+        - owner: x-botlab
+          name: another-service
+          pools: [pool-short]
+    - id: 10000001
+      repos:
+        - owner: x-botlab-org2
+          name: service-b
+          pools: [pool-short]
 
 eci:
-  region_id: cn-hangzhou
-  endpoint: eci.cn-hangzhou.aliyuncs.com
-  # More than one switch spreads launches across zones, which matters when a
-  # single zone runs out of stock.
-  vswitch_ids:
-    - vsw-xxxxxxxxxxxxxxxxx
-  security_group_id: sg-xxxxxxxxxxxxxxxxx
-  ram_role_name: eci-runner-self-delete
+  # One target per region. A pool is placed into exactly one target, so the same
+  # label can serve two regions only through two pools.
+  targets:
+    - name: hangzhou
+      region_id: cn-hangzhou
+      endpoint: eci.cn-hangzhou.aliyuncs.com
+      # More than one switch spreads launches across zones, which matters when a
+      # single zone runs out of stock.
+      vswitch_ids:
+        - vsw-xxxxxxxxxxxxxxxxx
+        - vsw-yyyyyyyyyyyyyyyyy
+      security_group_id: sg-xxxxxxxxxxxxxxxxx
+      ram_role_name: eci-runner-self-delete
+    - name: beijing
+      region_id: cn-beijing
+      endpoint: eci.cn-beijing.aliyuncs.com
+      vswitch_ids:
+        - vsw-zzzzzzzzzzzzzzzzz
+      security_group_id: sg-yyyyyyyyyyyyyyyyy
+      ram_role_name: eci-runner-self-delete
 
 runner:
   work_folder: _work
@@ -29,6 +56,7 @@ runner:
 pools:
   # Time sensitive jobs: pre-warmed so the ~60s container start is hidden.
   - name: pool-short
+    eci: hangzhou
     vcpu: 4
     memory_gib: 8
     min: 0
@@ -43,6 +71,7 @@ pools:
   # Docker builds and long jobs: created on demand, never pre-warmed, because a
   # 60s start is noise next to a 30 minute build.
   - name: pool-heavy
+    eci: beijing
     vcpu: 8
     memory_gib: 16
     min: 0
@@ -50,6 +79,6 @@ pools:
     max: 4
     labels:
       - eci-pool-heavy
-    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner-heavy:v1
+    image: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner-heavy:v1
     ttl_minutes: 400
     spot: false

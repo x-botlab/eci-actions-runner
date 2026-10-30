@@ -37,24 +37,26 @@ func newServerCmd(configPath *string) *cobra.Command {
 
 			forge, err := github.NewAppClient(github.Config{
 				AppID:          cfg.GitHub.AppID,
-				InstallationID: cfg.GitHub.InstallationID,
 				PrivateKeyPath: cfg.GitHub.PrivateKeyPath,
-				Owner:          cfg.GitHub.Owner,
-				Repo:           cfg.GitHub.Repo,
 			})
 			if err != nil {
 				return err
 			}
 
-			cloud, err := eci.New(eci.Config{
-				RegionID:        cfg.ECI.RegionID,
-				Endpoint:        cfg.ECI.Endpoint,
-				VSwitchID:       cfg.ECI.VSwitchIDs[0],
-				SecurityGroupID: cfg.ECI.SecurityGroupID,
-				RAMRoleName:     cfg.ECI.RAMRoleName,
-			})
-			if err != nil {
-				return err
+			clouds := make(map[string]eci.Backend, len(cfg.ECI.Targets))
+			for _, target := range cfg.ECI.Targets {
+				client, err := eci.New(eci.Config{
+					Name:            target.Name,
+					RegionID:        target.RegionID,
+					Endpoint:        target.Endpoint,
+					VSwitchIDs:      target.VSwitchIDs,
+					SecurityGroupID: target.SecurityGroupID,
+					RAMRoleName:     target.RAMRoleName,
+				})
+				if err != nil {
+					return err
+				}
+				clouds[target.Name] = client
 			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -65,8 +67,8 @@ func newServerCmd(configPath *string) *cobra.Command {
 
 			s := scheduler.New(scheduler.Deps{
 				Forge:    forge,
-				Cloud:    cloud,
-				Pools:    cfg.Pools,
+				Clouds:   clouds,
+				Bindings: cfg.Bindings(),
 				Interval: time.Duration(cfg.Runner.PollIntervalSeconds) * time.Second,
 				Logger:   logger,
 				Metrics:  m,

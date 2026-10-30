@@ -14,7 +14,7 @@ type Metrics struct {
 	// QueuedJobs is the queue depth per pool; a non-zero value that persists
 	// means expansion is failing.
 	QueuedJobs *prometheus.GaugeVec
-	// Instances is the observed container group count per pool and state.
+	// Instances is the observed container group count per repo and state.
 	Instances *prometheus.GaugeVec
 	// CreateFailures counts failed launches by reason (throttling, stock, quota).
 	CreateFailures *prometheus.CounterVec
@@ -31,21 +31,21 @@ func New() *Metrics {
 	m := &Metrics{
 		QueuedJobs: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "eci_runner_queued_jobs",
-			Help: "Workflow jobs waiting for a runner, per pool.",
-		}, []string{"pool"}),
+			Help: "Workflow jobs waiting for a runner, per repo and pool.",
+		}, []string{"repo", "pool"}),
 		Instances: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "eci_runner_instances",
-			Help: "Observed ECI container groups, per pool and state.",
-		}, []string{"pool", "state"}),
+			Help: "Observed ECI container groups, per repo, pool and state.",
+		}, []string{"repo", "pool", "state"}),
 		CreateFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "eci_runner_create_failures_total",
 			Help: "Failed container group launches, by reason.",
-		}, []string{"pool", "reason"}),
+		}, []string{"repo", "pool", "reason"}),
 		QueueWait: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "eci_runner_queue_wait_seconds",
 			Help:    "Time from job queueing to runner pickup.",
 			Buckets: []float64{1, 5, 15, 30, 60, 120, 300, 600},
-		}, []string{"pool"}),
+		}, []string{"repo", "pool"}),
 		Orphans: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "eci_runner_orphan_instances",
 			Help: "Container groups still present after their job finished.",

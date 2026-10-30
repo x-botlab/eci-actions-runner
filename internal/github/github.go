@@ -20,13 +20,23 @@ import (
 // ErrNotImplemented marks behaviour the scaffold deliberately leaves out.
 var ErrNotImplemented = errors.New("github: not implemented")
 
-// Config identifies the App installation.
+// Repo identifies one repository together with the App installation that is
+// allowed to mint tokens for it. A repository scoped runner only ever serves its
+// own repository, so every call carries the repo and its installation.
+type Repo struct {
+	Owner          string
+	Name           string
+	InstallationID int64
+}
+
+// String returns owner/name.
+func (r Repo) String() string { return r.Owner + "/" + r.Name }
+
+// Config is the app-level identity. Repository scope arrives with each call, so
+// one client serves every installation the App is installed on.
 type Config struct {
 	AppID          int64
-	InstallationID int64
 	PrivateKeyPath string
-	Owner          string
-	Repo           string
 }
 
 // Job is a queued workflow job that still needs a runner.
@@ -47,12 +57,13 @@ type Runner struct {
 	Labels []string
 }
 
-// Forge is everything the scheduler needs from GitHub.
+// Forge is everything the scheduler needs from GitHub. Every call is scoped to
+// one repository because a repository scoped runner cannot serve another repo.
 type Forge interface {
-	QueuedJobs(ctx context.Context, labels []string) ([]Job, error)
-	CreateJITConfig(ctx context.Context, name string, labels []string) (string, error)
-	Runners(ctx context.Context, namePrefix string) ([]Runner, error)
-	RemoveRunner(ctx context.Context, id int64) error
+	QueuedJobs(ctx context.Context, repo Repo, labels []string) ([]Job, error)
+	CreateJITConfig(ctx context.Context, repo Repo, name string, labels []string) (string, error)
+	Runners(ctx context.Context, repo Repo, namePrefix string) ([]Runner, error)
+	RemoveRunner(ctx context.Context, repo Repo, id int64) error
 }
 
 // AppClient authenticates as a GitHub App installation.
@@ -121,23 +132,24 @@ func (c *AppClient) AppJWT(now time.Time) (string, error) {
 	return token, nil
 }
 
-// QueuedJobs lists jobs whose runs-on labels this pool could satisfy.
-func (c *AppClient) QueuedJobs(ctx context.Context, labels []string) ([]Job, error) {
+// QueuedJobs lists jobs whose runs-on labels this pool could satisfy. The
+// installation token for repo.InstallationID is cached and refreshed here.
+func (c *AppClient) QueuedJobs(ctx context.Context, repo Repo, labels []string) ([]Job, error) {
 	return nil, ErrNotImplemented
 }
 
 // CreateJITConfig mints a one-shot runner configuration for a single job.
-func (c *AppClient) CreateJITConfig(ctx context.Context, name string, labels []string) (string, error) {
+func (c *AppClient) CreateJITConfig(ctx context.Context, repo Repo, name string, labels []string) (string, error) {
 	return "", ErrNotImplemented
 }
 
 // Runners lists registered runners whose name starts with namePrefix.
-func (c *AppClient) Runners(ctx context.Context, namePrefix string) ([]Runner, error) {
+func (c *AppClient) Runners(ctx context.Context, repo Repo, namePrefix string) ([]Runner, error) {
 	return nil, ErrNotImplemented
 }
 
 // RemoveRunner unregisters a runner that never came online.
-func (c *AppClient) RemoveRunner(ctx context.Context, id int64) error {
+func (c *AppClient) RemoveRunner(ctx context.Context, repo Repo, id int64) error {
 	return ErrNotImplemented
 }
 

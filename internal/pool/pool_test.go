@@ -50,6 +50,7 @@ func TestMatches(t *testing.T) {
 func TestValidate(t *testing.T) {
 	valid := Spec{
 		Name:       "pool-short",
+		ECI:        "hangzhou",
 		VCPU:       4,
 		MemoryGiB:  8,
 		Max:        6,
@@ -71,6 +72,7 @@ func TestValidate(t *testing.T) {
 		{name: "min above max", mutate: func(s *Spec) { s.Min = 7 }},
 		{name: "warm above max", mutate: func(s *Spec) { s.Warm = 7 }},
 		{name: "no labels", mutate: func(s *Spec) { s.Labels = nil }},
+		{name: "no eci target", mutate: func(s *Spec) { s.ECI = "" }},
 		{name: "no image", mutate: func(s *Spec) { s.Image = "" }},
 		{name: "no ttl", mutate: func(s *Spec) { s.TTLMinutes = 0 }},
 	}
