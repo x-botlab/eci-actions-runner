@@ -1,0 +1,54 @@
+name: eci-smoke
+
+# Manual trigger only. This repository is public, and a self-hosted runner must
+# never pick up work from an untrusted source: a fork pull request would otherwise
+# execute its own code inside the container.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, eci-pool-short]
+    timeout-minutes: 15
+    steps:
+      - name: Identity
+        run: |
+          echo "runner     : $RUNNER_NAME"
+          echo "os         : $(uname -srm)"
+          echo "user       : $(id -un) ($(id -u):$(id -g))"
+          echo "started at : $(date -u +%FT%TZ)"
+
+      - uses: actions/checkout@v4
+
+      - name: Workspace
+        run: |
+          pwd
+          ls -la
+          git log --oneline -1
+
+      - name: Toolchain
+        run: |
+          node --version
+          npm --version
+          go version
+          python3 --version
+          docker --version
+          docker buildx version
+          git --version
+
+      - name: Egress
+        run: |
+          curl -fsS -o /dev/null -w 'github.com     %{http_code}\n' https://github.com
+          curl -fsS -o /dev/null -w 'api.github.com %{http_code}\n' https://api.github.com
+          curl -fsS -o /dev/null -w 'registry       %{http_code}\n' https://registry.cn-hangzhou.aliyuncs.com/v2/
+
+      - name: Secrets are not visible to the job
+        run: |
+          if [ -n "${ACTIONS_RUNNER_INPUT_JITCONFIG:-}" ]; then
+            echo "FAIL: the JIT registration credential is visible to the job"
+            exit 1
+          fi
+          echo "ok: ACTIONS_RUNNER_INPUT_JITCONFIG is not set"
