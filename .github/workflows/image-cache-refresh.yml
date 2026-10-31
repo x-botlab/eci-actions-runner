@@ -52,6 +52,14 @@ jobs:
     env:
       CACHE_PREFIX: eci-store
       FAMILY: ${{ matrix.family }}
+      # A step does not inherit the runner's own environment, so the target's OSS
+      # settings are repeated here. None of these are secrets: access needs a
+      # container bound to the role, and the token is minted inside it. Override
+      # them with repository variables if the bucket moves.
+      ECI_OSS_ROLE: ${{ vars.ECI_OSS_ROLE || 'eci-oss-cache' }}
+      ECI_OSS_BUCKET: ${{ vars.ECI_OSS_BUCKET || 'zerobit-actions-cache' }}
+      ECI_OSS_ENDPOINT: ${{ vars.ECI_OSS_ENDPOINT || 'oss-cn-hongkong-internal.aliyuncs.com' }}
+      ECI_OSS_REGION: ${{ vars.ECI_OSS_REGION || 'cn-hongkong' }}
     steps:
       - name: Show the cache target
         run: |
