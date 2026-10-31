@@ -42,9 +42,12 @@ if [[ -z "$bucket" || -z "${ECI_OSS_ROLE:-}" || -z "${ECI_OSS_ENDPOINT:-}" ]]; t
 fi
 
 prefix="eci-store/$key"
-content=$(timeout 30 eci-oss cat "oss://$bucket/$prefix/latest" 2>/dev/null | tr -d '[:space:]')
+# ossutil also prints its elapsed time on stdout, so the pointer is parsed rather
+# than taken verbatim.
+latest="oss://$bucket/$prefix/latest"
+content=$(timeout 30 eci-oss cat "$latest" 2>/dev/null | grep -oE '\b[0-9a-f]{16}\b' | head -n1)
 if [[ -z "$content" ]]; then
-    log "no cache entry at oss://$bucket/$prefix/latest"
+    log "no cache entry at $latest"
     exit 0
 fi
 archive="oss://$bucket/$prefix/$content.tar.zst"
@@ -65,10 +68,11 @@ done
 # this user's shell cannot even list it, and `sudo rm -rf /var/lib/docker/*`
 # would pass the unexpanded pattern straight to rm.
 sudo -n sh -c 'rm -rf /var/lib/docker/* /var/lib/docker/.[!.]* 2>/dev/null || true'
+started=$SECONDS
 if timeout 300 bash -c "set -o pipefail; eci-oss cat '$archive' | zstd -dc | sudo -n tar --xattrs --xattrs-include='*' --acls --numeric-owner -C /var/lib/docker -xf -"; then
-    log "restored image cache $key/$content ($(sudo -n du -sh /var/lib/docker 2>/dev/null | cut -f1))"
+    log "restored image cache $key/$content in $((SECONDS - started))s ($(sudo -n du -sh /var/lib/docker 2>/dev/null | cut -f1))"
 else
-    log "restore of $key/$content failed, continuing with an empty store"
+    log "restore of $key/$content failed after $((SECONDS - started))s, continuing with an empty store"
     sudo -n sh -c 'rm -rf /var/lib/docker/* /var/lib/docker/.[!.]* 2>/dev/null || true'
 fi
 
