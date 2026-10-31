@@ -98,18 +98,35 @@ jobs:
         # The store's metadata has to be quiescent before it is archived, or the
         # snapshot directories and the database disagree on restore.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           sudo -n pkill -TERM -x dockerd || true
           for _ in $(seq 1 30); do
             docker info >/dev/null 2>&1 || break
             sleep 1
           done
+          # The API can stop answering before the process has flushed and exited.
+          if sudo -n pgrep -x dockerd >/dev/null; then
+            sleep 5
+            sudo -n pkill -KILL -x dockerd || true
+          fi
+          sleep 2
+          sudo -n pgrep -x dockerd && echo "dockerd is still running" >&2 || echo "dockerd stopped"
 
       - name: Archive the store
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          # `tar` exits 1 when a file changed while it was read. That is expected
+          # here (a dying daemon can still touch a log), and only exit 2 or worse
+          # means the archive is unusable. Container logs are excluded outright:
+          # they are per job and the only files still moving.
           sudo -n tar --xattrs --xattrs-include='*' --acls --numeric-owner \
-            -C /var/lib/docker -cf - . | zstd -3 -T0 -q -o /tmp/store.tar.zst
+            --exclude=./containers -C /var/lib/docker -cf - . \
+            | zstd -3 -T0 -q -o /tmp/store.tar.zst
+          rc=$?
+          if [ "$rc" -gt 1 ]; then
+            echo "tar failed with $rc" >&2
+            exit "$rc"
+          fi
           ls -lh /tmp/store.tar.zst
           sudo -n du -sh /var/lib/docker
 
