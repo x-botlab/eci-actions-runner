@@ -137,19 +137,33 @@ jobs:
           # same key, a changed one gets a new object instead of overwriting what
           # a running job may still be reading.
           hash=$(sha256sum /tmp/images.txt | cut -c1-16)
+          echo "CACHE_HASH=$hash" >> "$GITHUB_ENV"
           remote="oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY"
           eci-oss cp /tmp/store.tar.zst "$remote/$hash.tar.zst"
           echo "$hash" > /tmp/latest
           eci-oss cp /tmp/latest "$remote/latest"
           eci-oss stat "$remote/$hash.tar.zst" | sed -n '1,12p'
 
-      - name: Prune old archives
-        # Only objects older than the retention window are candidates, so the
-        # archive just uploaded and its `latest` pointer can never be removed.
+      - name: Prune stale archives
+        # One archive per family: every `.tar.zst` other than the one just
+        # uploaded is a previous generation. Age filters are avoided here — a
+        # misread one deletes what was just written.
         run: |
           set -euo pipefail
-          eci-oss rm "oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY/" -r -f --max-age 30d || true
-          eci-oss ls "oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY/"
+          keep="$CACHE_HASH.tar.zst"
+          remote="oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY"
+          eci-oss ls "$remote/" | awk 'NF >= 5 { print $NF }' | while read -r url; do
+            case "$url" in
+              *.tar.zst) ;;
+              *) continue ;;
+            esac
+            name=${url##*/}
+            if [ "$name" != "$keep" ]; then
+              echo "removing stale $name"
+              eci-oss rm "$url" -f
+            fi
+          done
+          eci-oss ls "$remote/"
 
       - name: Clean up
         if: always()
