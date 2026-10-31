@@ -74,12 +74,6 @@ type Config struct {
 	// EIPISP selects the line type: BGP or BGP_PRO (premium). Empty keeps the
 	// ECI default.
 	EIPISP string
-	// OSSBucket and OSSEndpoint point the runner at the object store that holds
-	// image cache archives. They are only read when a pool names an image cache
-	// and are handed to the container, which authenticates with RAMRoleName
-	// through the metadata service instead of a key pair.
-	OSSBucket   string
-	OSSEndpoint string
 	// Registries holds the credentials for private images. ECI picks the one
 	// whose server matches the image, so unrelated registries are never sent.
 	Registries []Registry
@@ -101,9 +95,6 @@ type Spec struct {
 	// docker daemon before the runner. ECI only allows that for whitelisted
 	// accounts.
 	Privileged bool
-	// ImageCache names the archive the job hook restores before the daemon
-	// starts. Empty leaves the store empty.
-	ImageCache string
 	TTL        time.Duration
 	Spot       bool
 }
@@ -252,19 +243,6 @@ const (
 	// EnvPrivileged tells the image that it was created privileged and has to
 	// run a docker daemon.
 	EnvPrivileged = "ECI_RUNNER_PRIVILEGED"
-	// EnvImageCache names the archive family the job hook restores. The image
-	// stays inert without it, so a pool opt in by setting image_cache.
-	EnvImageCache = "ECI_RUNNER_IMAGE_CACHE"
-	// EnvOSSRole / EnvOSSBucket / EnvOSSEndpoint describe the object store the
-	// hook reads the archive from. The role is an instance role: the container
-	// fetches its STS token from the metadata service, so no key pair is ever
-	// put in the container spec.
-	EnvOSSRole     = "ECI_OSS_ROLE"
-	EnvOSSBucket   = "ECI_OSS_BUCKET"
-	EnvOSSEndpoint = "ECI_OSS_ENDPOINT"
-	// EnvOSSRegion is the bucket's region. ossutil needs it for signature v4
-	// whenever the credentials are an STS token.
-	EnvOSSRegion = "ECI_OSS_REGION"
 
 	// The daemon needs a data root that is not the container's own filesystem:
 	// ECI's root is overlayfs and overlayfs cannot stack on itself, so every
@@ -370,21 +348,11 @@ func (c *Client) launchRequest(spec Spec, vswitch string) (*eciclient.CreateCont
 	env := maps.Clone(spec.Env)
 	if spec.Privileged {
 		if env == nil {
-			env = make(map[string]string, 4)
+			env = make(map[string]string, 1)
 		}
 		// The image only runs dockerd when the container was created privileged,
 		// so the flag travels with the launch instead of the image.
 		env[EnvPrivileged] = "1"
-	}
-	if spec.ImageCache != "" && c.cfg.OSSBucket != "" {
-		if env == nil {
-			env = make(map[string]string, 4)
-		}
-		env[EnvImageCache] = spec.ImageCache
-		env[EnvOSSRole] = c.cfg.RAMRoleName
-		env[EnvOSSBucket] = c.cfg.OSSBucket
-		env[EnvOSSEndpoint] = c.cfg.OSSEndpoint
-		env[EnvOSSRegion] = c.cfg.RegionID
 	}
 
 	container := &eciclient.CreateContainerGroupRequestContainer{

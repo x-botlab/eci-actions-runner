@@ -38,8 +38,7 @@ used together with an ImageCache and, for short jobs, a warm pool.
 | dockerd | 29.9.2, started only for a privileged pool |
 | buildx | 0.38.1 |
 | supervisor | 4.2.5 (`supervisord`, used for the daemon + runner) |
-| ossutil | 2.3.0, reached through [oss.sh](oss.sh) as `eci-oss` |
-| plus | git + git-lfs, build-essential, jq, less, rsync, sudo, iptables, zstd |
+| plus | git + git-lfs, build-essential, jq, less, rsync, sudo, iptables |
 
 The Docker CLI alone cannot build an image, so the daemon ships too: `dockerd`,
 `runc`, `docker-proxy` and `docker-init` come from the same static tarball as the
@@ -52,14 +51,10 @@ container group is one container and is only deleted once every container in it
 has exited. A sidecar daemon never exits, so the group would stay `Running` until
 its TTL even after the job ended. [entrypoint.sh](entrypoint.sh) therefore hands a
 privileged container to `supervisord`, which runs two programs:
-[dockerd under sudo](dockerd.sh) and [runner.sh](runner.sh). `runner.sh` waits for
-the daemon, runs `run.sh`, and shuts the supervisor down when the runner exits, so
-the container ends with the job and `dockerd --group runner` leaves a socket the
-job steps can use without `sudo`.
-
-A pool that restores an image cache is the exception: `dockerd.sh` exits
-immediately and [job-started.sh](job-started.sh) starts the daemon after it has
-replaced `/var/lib/docker`, so no daemon ever sees a half-swapped store.
+[dockerd under sudo](eci-runner.conf) and [runner.sh](runner.sh). `runner.sh`
+waits for the daemon, runs `run.sh`, and shuts the supervisor down when the runner
+exits, so the container ends with the job and `dockerd --group runner` leaves a
+socket the job steps can use without `sudo`.
 
 `PIP_BREAK_SYSTEM_PACKAGES=1` is set because Ubuntu 24.04 ships PEP 668 and a job
 that runs `pip install -r requirements.txt` would otherwise fail outside a venv.
@@ -77,33 +72,6 @@ No environment variable covers it either. So the only way to keep start-up free 
 an update download is to ship the newest runner, which means rebuilding this image
 when GitHub publishes one. `make image-versions` prints the upstream version
 against the pinned one.
-
-## Warming the daemon's image store
-
-A privileged pool can start each job with images already pulled. Two pieces:
-
-- [job-started.sh](job-started.sh), the `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook,
-  runs inside the runner container before the runner creates the job's
-  containers. In a cached pool the daemon is not started at boot, so the hook
-  replaces `/var/lib/docker` with the archive and then starts `dockerd` itself —
-  a daemon that already held the old store cannot survive the swap.
-- [oss.sh](oss.sh) (`eci-oss`) puts ossutil behind the container group's instance
-  role: it reads the STS token from the ECI metadata service
-  (`100.100.100.200`) and calls `ossutil` with it. No key pair is in the container
-  spec, and every call mints a fresh token, so a long job cannot run into an
-  expiry.
-
-The archive is downloaded to a file and then unpacked (`zstd -dc | tar -x`) rather
-than streamed: `ossutil cat` writes its timing footer to the same stdout as the
-payload, which zstd reads as a corrupt frame. There is no bucket mount either —
-ossfs needed a FlexVolume plug-in that failed on a real container group in more
-than one option combination, and it is slow for anything but a few large objects.
-
-Sizes and throughput measured in cn-hongkong: 180 MB/s upload, 122 MB/s download,
-and a 2.6 GiB store restores from a 1.2 GiB archive in 12 s.
-
-The hook never fails a job: no cache, a missing object, or a broken archive all
-log and leave an empty store, and the job falls back to plain pulls.
 
 ## How the credential reaches the runner
 

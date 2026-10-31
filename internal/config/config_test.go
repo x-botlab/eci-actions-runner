@@ -256,45 +256,6 @@ func TestValidateRejectsEIPISPWithoutEIP(t *testing.T) {
 	}
 }
 
-// The image cache lives in OSS and is reached with the instance role, so a
-// target that names a bucket without a role can only fail later, inside a job.
-func TestValidateRejectsOSSBucketWithoutRole(t *testing.T) {
-	body := strings.Replace(minimal, "      security_group_id: sg-1\n",
-		"      security_group_id: sg-1\n      oss_bucket: cache\n      oss_endpoint: oss-cn-hongkong-internal.aliyuncs.com\n", 1)
-	_, err := Load(writeConfig(t, body))
-	if err == nil || !strings.Contains(err.Error(), "oss_bucket requires ram_role_name") {
-		t.Fatalf("expected a role requirement error, got %v", err)
-	}
-}
-
-func TestValidateRejectsHalfAnOSSConfig(t *testing.T) {
-	body := strings.Replace(minimal, "      security_group_id: sg-1\n",
-		"      security_group_id: sg-1\n      ram_role_name: eci-oss-cache\n      oss_bucket: cache\n", 1)
-	_, err := Load(writeConfig(t, body))
-	if err == nil || !strings.Contains(err.Error(), "must be set together") {
-		t.Fatalf("expected a bucket/endpoint error, got %v", err)
-	}
-}
-
-func TestValidateAcceptsOSSAndImageCache(t *testing.T) {
-	body := strings.Replace(minimal, "      security_group_id: sg-1\n",
-		"      security_group_id: sg-1\n      ram_role_name: eci-oss-cache\n"+
-			"      oss_bucket: cache\n      oss_endpoint: oss-cn-hongkong-internal.aliyuncs.com\n", 1)
-	body = strings.Replace(body, "    ttl_minutes: 380\n",
-		"    ttl_minutes: 380\n    privileged: true\n    image_cache: laravel\n", 1)
-	cfg, err := Load(writeConfig(t, body))
-	if err != nil {
-		t.Fatalf("expected the oss target and image cache to be accepted: %v", err)
-	}
-	target := cfg.ECI.Targets[0]
-	if target.OSSBucket != "cache" || target.OSSEndpoint != "oss-cn-hongkong-internal.aliyuncs.com" {
-		t.Fatalf("target = %+v", target)
-	}
-	if cfg.Pools[0].ImageCache != "laravel" {
-		t.Fatalf("pool = %+v, want the cache family kept", cfg.Pools[0])
-	}
-}
-
 func TestValidateRequiresClientID(t *testing.T) {
 	body := strings.Replace(minimal, "  client_id: Iv1.minimal\n", "", 1)
 	_, err := Load(writeConfig(t, body))

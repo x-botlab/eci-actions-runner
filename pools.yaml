@@ -55,12 +55,6 @@ eci:
       # BGP_PRO is the premium line. Verified on cn-hongkong: the created EIP
       # reports ISP=BGP_PRO and Bandwidth=200.
       eip_isp: BGP_PRO
-      # Optional: the OSS bucket that holds image cache archives. Set together
-      # with oss_endpoint, and only on a target whose ram_role_name can read it.
-      # The container mints its own STS token from the metadata service, so no key
-      # pair ever appears in the container spec.
-      oss_bucket: example-actions-cache
-      oss_endpoint: oss-cn-hangzhou-internal.aliyuncs.com
     - name: beijing
       region_id: cn-beijing
       endpoint: eci.cn-beijing.aliyuncs.com
@@ -136,8 +130,3 @@ pools:
     ttl_minutes: 380
     spot: true
     privileged: true
-    # Restores the `docker` archive of the OSS image cache before every job, so
-    # repeated `services:` and `container:` jobs skip their pulls. The family is
-    # named here, not derived from the job: the hook runs before the runner knows
-    # which job it is about to take. See eci.oss_bucket on the target above.
-    image_cache: docker

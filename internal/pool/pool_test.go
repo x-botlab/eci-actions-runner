@@ -82,8 +82,6 @@ func TestValidate(t *testing.T) {
 		{name: "no image", mutate: func(s *Spec) { s.Image = "" }},
 		{name: "no ttl", mutate: func(s *Spec) { s.TTLMinutes = 0 }},
 		{name: "empty image override", mutate: func(s *Spec) { s.Images = map[string]string{"b": ""} }},
-		{name: "cache without privileged", mutate: func(s *Spec) { s.ImageCache = "laravel" }},
-		{name: "cache with a path", mutate: func(s *Spec) { s.Privileged = true; s.ImageCache = "team/laravel" }},
 	}
 
 	for _, tt := range tests {

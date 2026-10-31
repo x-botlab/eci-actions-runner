@@ -87,11 +87,6 @@ type Spec struct {
 	// exits would keep the group Running after the job and delay its deletion
 	// until the TTL.
 	Privileged bool `yaml:"privileged" json:"privileged"`
-	// ImageCache names the cache family this pool restores before every job, for
-	// example "laravel". The archives live in the target's OSS bucket and are
-	// named after this key, because the bare unpack has to happen before dockerd
-	// starts and therefore before the job's own name is known.
-	ImageCache string `yaml:"image_cache" json:"image_cache"`
 }
 
 // ImageFor returns the image to pull in target, falling back to Image.
@@ -150,12 +145,6 @@ func (s Spec) Validate() error {
 		return fmt.Errorf("pool %q: image is required", s.Name)
 	case s.TTLMinutes <= 0:
 		return fmt.Errorf("pool %q: ttl_minutes must be greater than 0", s.Name)
-	case s.ImageCache != "" && !s.Privileged:
-		// Restoring an archive means replacing /var/lib/docker, which only exists
-		// when the pool runs a daemon.
-		return fmt.Errorf("pool %q: image_cache requires privileged", s.Name)
-	case strings.ContainsAny(s.ImageCache, " \t/"):
-		return fmt.Errorf("pool %q: image_cache %q must be a single path segment", s.Name, s.ImageCache)
 	}
 	for target, image := range s.Images {
 		if strings.TrimSpace(target) == "" || strings.TrimSpace(image) == "" {

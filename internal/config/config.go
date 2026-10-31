@@ -93,11 +93,6 @@ type Target struct {
 	EIPBandwidth int32 `yaml:"eip_bandwidth"`
 	// EIPISP is the public line type: BGP or BGP_PRO (premium).
 	EIPISP string `yaml:"eip_isp"`
-	// OSSBucket and OSSEndpoint name the object store that holds image cache
-	// archives. Both are regional, so they live on the target rather than on a
-	// pool, and the role in ram_role_name supplies the credentials.
-	OSSBucket   string `yaml:"oss_bucket"`
-	OSSEndpoint string `yaml:"oss_endpoint"`
 }
 
 // Binding is one schedulable unit: a repository, the pool serving it and the
@@ -312,15 +307,6 @@ func (c *Config) validateECI() error {
 			if t.EIPISP != "BGP" && t.EIPISP != "BGP_PRO" {
 				return fmt.Errorf("eci target %q: eip_isp %q is not BGP or BGP_PRO", t.Name, t.EIPISP)
 			}
-		}
-		if (t.OSSBucket == "") != (t.OSSEndpoint == "") {
-			return fmt.Errorf("eci target %q: oss_bucket and oss_endpoint must be set together", t.Name)
-		}
-		if t.OSSBucket != "" && strings.TrimSpace(t.RAMRoleName) == "" {
-			// The credentials come from the instance role through the metadata
-			// service, so a target that names a bucket without a role would only
-			// fail later, inside a job.
-			return fmt.Errorf("eci target %q: oss_bucket requires ram_role_name", t.Name)
 		}
 	}
 	return nil
