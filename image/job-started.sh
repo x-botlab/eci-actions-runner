@@ -52,12 +52,15 @@ for _ in {1..20}; do
     sleep 1
 done
 
-sudo -n rm -rf /var/lib/docker/* /var/lib/docker/.[!.]* 2>/dev/null || true
+# The glob has to be expanded by a root shell: /var/lib/docker is 0700 root, so
+# this user's shell cannot even list it, and `sudo rm -rf /var/lib/docker/*`
+# would pass the unexpanded pattern straight to rm.
+sudo -n sh -c 'rm -rf /var/lib/docker/* /var/lib/docker/.[!.]* 2>/dev/null || true'
 if timeout 180 bash -c "zstd -dc '$archive' | sudo -n tar --xattrs --xattrs-include='*' --acls --numeric-owner -C /var/lib/docker -xf -"; then
-    log "restored image cache $key/$content ($(du -sh /var/lib/docker 2>/dev/null | cut -f1))"
+    log "restored image cache $key/$content ($(sudo -n du -sh /var/lib/docker 2>/dev/null | cut -f1))"
 else
     log "restore of $key/$content failed, continuing with an empty store"
-    sudo -n rm -rf /var/lib/docker/* /var/lib/docker/.[!.]* 2>/dev/null || true
+    sudo -n sh -c 'rm -rf /var/lib/docker/* /var/lib/docker/.[!.]* 2>/dev/null || true'
 fi
 
 sudo -n /usr/local/bin/dockerd --host=unix:///var/run/docker.sock --group=runner --log-driver=local &
