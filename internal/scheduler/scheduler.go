@@ -282,12 +282,17 @@ func (s *Scheduler) reconcileBinding(ctx context.Context, binding config.Binding
 	}
 
 	have := capacityOf(observed, runners, s.pendingLaunches(repo, spec.Name, observed, time.Now()))
-	s.deps.Logger.Debug("observed",
-		"repo", repo, "pool", spec.Name,
-		"waiting", waiting, "idle", have.Idle, "starting", have.Starting,
-		"occupied", have.Occupied, "exiting", have.Exiting, "plan", spec.Plan(waiting, have))
+	plan := spec.Plan(waiting, have)
+	// Only noisy while there is demand: this line is what explains a launch or the
+	// absence of one, and a pool with an idle queue is the case worth reading.
+	if waiting > 0 {
+		s.deps.Logger.Info("pool capacity",
+			"repo", repo, "pool", spec.Name,
+			"waiting", waiting, "idle", have.Idle, "starting", have.Starting,
+			"occupied", have.Occupied, "exiting", have.Exiting, "plan", plan)
+	}
 
-	for launch := spec.Plan(waiting, have); launch > 0; launch-- {
+	for ; plan > 0; plan-- {
 		if pass.launched >= s.deps.MaxLaunches {
 			s.deps.Logger.Warn("launch budget exhausted for this pass",
 				"repo", repo, "pool", spec.Name, "budget", s.deps.MaxLaunches)
