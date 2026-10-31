@@ -52,10 +52,14 @@ container group is one container and is only deleted once every container in it
 has exited. A sidecar daemon never exits, so the group would stay `Running` until
 its TTL even after the job ended. [entrypoint.sh](entrypoint.sh) therefore hands a
 privileged container to `supervisord`, which runs two programs:
-[dockerd under sudo](eci-runner.conf) and [runner.sh](runner.sh). `runner.sh`
-waits for the daemon, runs `run.sh`, and shuts the supervisor down when the runner
-exits, so the container ends with the job and `dockerd --group runner` leaves a
-socket the job steps can use without `sudo`.
+[dockerd under sudo](dockerd.sh) and [runner.sh](runner.sh). `runner.sh` waits for
+the daemon, runs `run.sh`, and shuts the supervisor down when the runner exits, so
+the container ends with the job and `dockerd --group runner` leaves a socket the
+job steps can use without `sudo`.
+
+A pool that restores an image cache is the exception: `dockerd.sh` exits
+immediately and [job-started.sh](job-started.sh) starts the daemon after it has
+replaced `/var/lib/docker`, so no daemon ever sees a half-swapped store.
 
 `PIP_BREAK_SYSTEM_PACKAGES=1` is set because Ubuntu 24.04 ships PEP 668 and a job
 that runs `pip install -r requirements.txt` would otherwise fail outside a venv.
@@ -80,22 +84,23 @@ A privileged pool can start each job with images already pulled. Two pieces:
 
 - [job-started.sh](job-started.sh), the `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook,
   runs inside the runner container before the runner creates the job's
-  containers. It stops `dockerd`, replaces `/var/lib/docker` with the archive,
-  and restarts the daemon — the store's metadata only stays consistent if
-  nothing is writing while it is swapped.
+  containers. In a cached pool the daemon is not started at boot, so the hook
+  replaces `/var/lib/docker` with the archive and then starts `dockerd` itself —
+  a daemon that already held the old store cannot survive the swap.
 - [oss.sh](oss.sh) (`eci-oss`) puts ossutil behind the container group's instance
   role: it reads the STS token from the ECI metadata service
   (`100.100.100.200`) and calls `ossutil` with it. No key pair is in the container
   spec, and every call mints a fresh token, so a long job cannot run into an
   expiry.
 
-The archive is streamed, never staged: `eci-oss cat` → `zstd -dc` → `tar -x` into
-`/var/lib/docker`. That is why there is no bucket mount — ossfs needed a
-FlexVolume, a plug-in that failed on a real container group in more than one
-combination, and it is slow for anything but a few large objects.
+The archive is downloaded to a file and then unpacked (`zstd -dc | tar -x`) rather
+than streamed: `ossutil cat` writes its timing footer to the same stdout as the
+payload, which zstd reads as a corrupt frame. There is no bucket mount either —
+ossfs needed a FlexVolume plug-in that failed on a real container group in more
+than one option combination, and it is slow for anything but a few large objects.
 
-Sizes and throughput measured in cn-hongkong: 180 MB/s upload, 122 MB/s download
-beyond page cache, so a 2 GB archive restores in ~17 s.
+Sizes and throughput measured in cn-hongkong: 180 MB/s upload, 122 MB/s download,
+and a 2.6 GiB store restores from a 1.2 GiB archive in 12 s.
 
 The hook never fails a job: no cache, a missing object, or a broken archive all
 log and leave an empty store, and the job falls back to plain pulls.

@@ -253,9 +253,16 @@ pools:
 ```
 
 The hook is the only place that can do this: it runs before the runner creates
-the job's containers, so it can stop and restart `dockerd`, and it is handed
+the job's containers, so it can swap `/var/lib/docker`, and it is handed
 `GITHUB_WORKFLOW`/`GITHUB_JOB`. That timing is also why the key is a family and
 not a job: at hook time the job is not known yet. A pool opts in by naming one.
+
+A pool with `image_cache` therefore does **not** start `dockerd` at boot. Its
+supervisord program ([dockerd.sh](../image/dockerd.sh)) exits immediately, the
+hook restores the store and then starts the daemon itself. Without that ordering
+there are two daemons racing for the socket and the older one is left holding a
+store that was just deleted underneath it — which hangs the job rather than
+failing it.
 
 Nothing secret is in the container spec. The target's `ram_role_name` is an
 instance role; the container reads its STS token from the metadata service
@@ -263,12 +270,13 @@ instance role; the container reads its STS token from the metadata service
 that token. The role needs `oss:GetObject`, `oss:GetObjectMeta`, `oss:ListObjects`,
 `oss:PutObject`, `oss:DeleteObject` and `oss:AbortMultipartUpload` on the bucket.
 
-Measured in cn-hongkong against a real container group: 180 MB/s up, 122 MB/s
-down, so a 2 GB archive restores in about 17 s.
+Measured end to end on a real container group: a 2.6 GiB store restores from a
+1.2 GiB archive in 12 s, and the daemon then reports 4 images. Raw throughput on
+the same instance: 180 MB/s up, 122 MB/s down.
 
 Refresh the archives with the `Image cache refresh` workflow: it pulls a family's
-images on a cache-less privileged pool, archives `/var/lib/docker` with
-`tar | zstd`, uploads `<family>/<hash>.tar.zst`, and moves the `<family>/latest`
+images on a cache-less privileged pool (`pool-cache`), archives `/var/lib/docker`
+with `tar | zstd`, uploads `<family>/<hash>.tar.zst`, and moves the `<family>/latest`
 pointer. Run it after bumping a base image; the schedule catches drift. A restore
 failure only logs and leaves an empty store, so the job falls back to plain pulls.
 
