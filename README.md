@@ -84,6 +84,15 @@ total of all four buckets, because an occupied instance costs the same as an idl
 one. Counting running groups instead made a full pool look big enough: a deploy
 once waited 5m22s behind four unrelated test jobs on the same pool.
 
+That shortfall is damped before it is acted on. GitHub keeps reporting a job as
+`queued` until its runner actually starts it — up to a minute after the runner was
+assigned, and `runner_name` is still empty in that window — so a job that already
+has an instance keeps looking like unmet demand while its instance counts as
+occupied. Acting on the raw number created a sixth instance for five jobs. Once the
+pool holds anything at all, only a shortfall that was also there one pass earlier
+is acted on; an empty pool, which has no such lag, launches immediately. The cost
+is at most one poll interval before the first instance of a burst.
+
 Two rules keep this safe:
 
 - **Never launch on partial information.** If a target's describe call or the
