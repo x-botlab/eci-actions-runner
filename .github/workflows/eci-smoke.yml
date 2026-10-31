@@ -103,6 +103,24 @@ jobs:
             echo "ok: go is absent, this job chose its own image"
           fi
 
+  deploy-cache:
+    # Verifies the `deploy` family restores on pool-deploy without running a real
+    # deploy: the point is that the base images a deploy pulls are already in the
+    # daemon's store when the first step starts.
+    runs-on: [self-hosted, eci-pool-deploy]
+    timeout-minutes: 15
+    steps:
+      - name: The deploy base images are already in the store
+        run: |
+          docker version --format 'daemon {{.Server.Version}}'
+          docker images --format '{{.Repository}}:{{.Tag}}'
+          for want in php:8.3.36-cli-bookworm node:22-bookworm-slim; do
+            docker image inspect "$want" >/dev/null 2>&1 && echo "ok: $want" || {
+              echo "missing from the store: $want" >&2
+              exit 1
+            }
+          done
+
   services:
     # A job with services needs the daemon before its first step, so this is the
     # case that decides whether the pre-job hook can ever warm the image store: the
