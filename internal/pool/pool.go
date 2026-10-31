@@ -120,12 +120,15 @@ type Capacity struct {
 // idle count: an occupied instance costs exactly as much as an idle one.
 func (c Capacity) Total() int { return c.Idle + c.Starting + c.Occupied + c.Exiting }
 
-// Plan returns how many container groups to create now.
+// Plan returns the raw shortfall: how many container groups the queue needs that
+// the pool cannot serve yet.
 //
 // The target is a number of instances that can take work, so an occupied or
 // exiting group never counts towards it. Otherwise a pool that is full of running
 // jobs would decide it has enough machines and leave the next job queued until an
 // unrelated job happens to finish.
+//
+// The scheduler damps the result before acting on it; see settleShortfall.
 func (s Spec) Plan(queued int, have Capacity) int {
 	if queued < 0 {
 		queued = 0

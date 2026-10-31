@@ -545,6 +545,9 @@ func TestPendingLaunchIsForgottenOnceVisible(t *testing.T) {
 // Regression: a pool whose instances are all busy used to look "big enough" and
 // the queued job waited for an unrelated job to finish. Observed in production:
 // a deploy waited 5m22s behind four test jobs on the same pool.
+//
+// The first pass only observes the shortfall — acting on it immediately would
+// misfire on a lagging queue entry — so the launch happens on the second pass.
 func TestReconcileLaunchesWhenEveryInstanceIsBusy(t *testing.T) {
 	forge := &fakeForge{
 		jobs: []github.Job{queuedJob(1, "eci-pool-short")},
@@ -562,7 +565,14 @@ func TestReconcileLaunchesWhenEveryInstanceIsBusy(t *testing.T) {
 	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
 
 	if err := s.Reconcile(context.Background()); err != nil {
-		t.Fatalf("reconcile: %v", err)
+		t.Fatalf("first pass: %v", err)
+	}
+	if cloud.launches != 0 {
+		t.Fatalf("launches = %d on the first pass, want 0: the shortfall must persist", cloud.launches)
+	}
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
 	}
 	if cloud.launches != 1 {
 		t.Fatalf("launches = %d, want 1: every instance is busy", cloud.launches)
@@ -579,10 +589,47 @@ func TestReconcileLaunchesWhileAnInstanceIsExiting(t *testing.T) {
 	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
 
 	if err := s.Reconcile(context.Background()); err != nil {
-		t.Fatalf("reconcile: %v", err)
+		t.Fatalf("first pass: %v", err)
+	}
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
 	}
 	if cloud.launches != 1 {
 		t.Fatalf("launches = %d, want 1: the group has no registered runner", cloud.launches)
+	}
+}
+
+// Regression: for a few seconds after a runner is assigned, GitHub still lists the
+// job as queued. Acting on that made the scheduler create a second instance for a
+// job that already had one — six instances for four jobs, measured on a real pool.
+func TestReconcileIgnoresALaggingQueueEntry(t *testing.T) {
+	// Two jobs already running, but still listed as queued.
+	forge := &fakeForge{
+		jobs: []github.Job{
+			queuedJob(1, "eci-pool-short"),
+			queuedJob(2, "eci-pool-short"),
+		},
+		runners: []github.Runner{
+			{ID: 1, Name: "eci-pool-short-a", Status: "online", Busy: true},
+			{ID: 2, Name: "eci-pool-short-b", Status: "online", Busy: true},
+		},
+	}
+	cloud := &fakeBackend{instances: []eci.Instance{
+		{ID: "i-a", Name: "eci-pool-short-a", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+		{ID: "i-b", Name: "eci-pool-short-b", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+	}}
+	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	// The statuses catch up: nothing is queued any more.
+	forge.jobs = nil
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if cloud.launches != 0 {
+		t.Fatalf("launches = %d, want 0: those jobs already had runners", cloud.launches)
 	}
 }
 

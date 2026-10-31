@@ -60,6 +60,15 @@ type Scheduler struct {
 	// apart would both decide to create a runner for the same job.
 	mu       sync.Mutex
 	inFlight map[string]time.Time
+
+	// shortfalls remembers the last shortfall each binding reported, so a demand
+	// that is only a lagging queue entry is not acted on twice.
+	shortfalls map[string]shortfallEntry
+}
+
+type shortfallEntry struct {
+	shortfall int
+	at        time.Time
 }
 
 // inFlightTTL bounds how long a remembered launch counts as pending. Past it, the
@@ -75,9 +84,10 @@ func New(deps Deps) *Scheduler {
 		deps.PendingTimeout = defaultPendingTimeout
 	}
 	return &Scheduler{
-		deps:     deps,
-		kick:     make(chan struct{}, 1),
-		inFlight: make(map[string]time.Time),
+		deps:       deps,
+		kick:       make(chan struct{}, 1),
+		inFlight:   make(map[string]time.Time),
+		shortfalls: make(map[string]shortfallEntry),
 	}
 }
 
@@ -282,14 +292,17 @@ func (s *Scheduler) reconcileBinding(ctx context.Context, binding config.Binding
 	}
 
 	have := capacityOf(observed, runners, s.pendingLaunches(repo, spec.Name, observed, time.Now()))
-	plan := spec.Plan(waiting, have)
-	// Only noisy while there is demand: this line is what explains a launch or the
-	// absence of one, and a pool with an idle queue is the case worth reading.
-	if waiting > 0 {
+	now := time.Now()
+	shortfall := spec.Plan(waiting, have)
+	previous := s.previousShortfall(repo, spec.Name, now)
+	s.rememberShortfall(repo, spec.Name, shortfall, now)
+	plan := settleShortfall(shortfall, previous, have.Total())
+	if waiting > 0 || plan > 0 {
 		s.deps.Logger.Info("pool capacity",
 			"repo", repo, "pool", spec.Name,
 			"waiting", waiting, "idle", have.Idle, "starting", have.Starting,
-			"occupied", have.Occupied, "exiting", have.Exiting, "plan", plan)
+			"occupied", have.Occupied, "exiting", have.Exiting,
+			"shortfall", shortfall, "previous", previous, "plan", plan)
 	}
 
 	for ; plan > 0; plan-- {
@@ -446,6 +459,48 @@ func capacityOf(observed []eci.Instance, runners []github.Runner, pending int) p
 		}
 	}
 	return have
+}
+
+// settleShortfall damps a lag the two data sources cannot avoid. GitHub reports a
+// job as queued until its runner starts it, which for a cold container is up to a
+// minute after the runner was assigned; the instance is already counted as
+// occupied by then and no longer counts as capacity. Acting on the raw shortfall
+// in that window creates a second instance for a job that already has one —
+// measured on a pool with four jobs, six instances were created.
+//
+// So once the pool has instances at all, only a shortfall that was also there one
+// pass earlier is acted on. A pool with nothing in it has no lag to damp and
+// launches immediately, which is the common case.
+func settleShortfall(shortfall, previous, existing int) int {
+	if existing == 0 {
+		return shortfall
+	}
+	return min(shortfall, previous)
+}
+
+// shortfallTTL bounds how long a remembered shortfall counts as "the previous
+// pass". Past it, a pool that had no demand for a while must observe the demand
+// again before acting, instead of trusting a stale number.
+const shortfallTTL = 5 * time.Minute
+
+// previousShortfall returns the shortfall this binding reported last pass, or 0
+// when that was too long ago to mean anything.
+func (s *Scheduler) previousShortfall(repo, poolName string, now time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.shortfalls[launchKey(repo, poolName, "")]
+	if !ok || now.Sub(entry.at) > shortfallTTL {
+		return 0
+	}
+	return entry.shortfall
+}
+
+func (s *Scheduler) rememberShortfall(repo, poolName string, shortfall int, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.shortfalls[launchKey(repo, poolName, "")] = shortfallEntry{shortfall: shortfall, at: now}
 }
 
 // pruneRunners removes runners that registered from a JIT config but never came
