@@ -62,3 +62,39 @@ jobs:
             exit 1
           fi
           echo "ok: ACTIONS_RUNNER_INPUT_JITCONFIG is not set"
+
+  container:
+    # The "bring your own toolchain" path: the pool keeps one runner image and the
+    # workflow names the image its steps need, so a job does not reinstall PHP,
+    # browsers or an SDK on every run. A job container needs a docker daemon, so
+    # this only works on a privileged pool.
+    #
+    # The image needs git (checkout runs inside it) and a shell; the runner injects
+    # its own node for JS actions, so node is not a requirement.
+    runs-on: [self-hosted, eci-pool-docker]
+    timeout-minutes: 15
+    container:
+      image: node:22-bookworm
+    steps:
+      - name: Identity
+        run: |
+          echo "container  : $(hostname)"
+          echo "user       : $(id -un) ($(id -u):$(id -g))"
+          echo "node       : $(node --version)"
+          echo "git        : $(git --version)"
+
+      - uses: actions/checkout@v4
+
+      - name: The workspace is shared with the job container
+        run: |
+          pwd
+          test -f go.mod && echo "ok: the checkout is visible inside the container"
+          git log --oneline -1
+
+      - name: The runner's toolchain is not in the image
+        run: |
+          if command -v go >/dev/null 2>&1; then
+            echo "go is present: $(go version)"
+          else
+            echo "ok: go is absent, this job chose its own image"
+          fi
