@@ -211,6 +211,7 @@ ENV LANG=C.UTF-8 \
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/eci-entrypoint.sh
 COPY --chmod=0755 runner.sh /usr/local/bin/eci-run.sh
+COPY --chmod=0755 dockerd.sh /usr/local/bin/eci-dockerd.sh
 COPY --chmod=0755 job-started.sh /usr/local/bin/eci-job-started.sh
 COPY --chmod=0755 oss.sh /usr/local/bin/eci-oss
 COPY --chmod=0644 eci-runner.conf /etc/supervisor/eci-runner.conf

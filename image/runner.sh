@@ -26,17 +26,23 @@ if [[ -n "${SUPERVISOR_ENABLED:-}" ]]; then
 fi
 
 if [[ "${ECI_RUNNER_PRIVILEGED:-}" == "1" ]]; then
-    # dockerd is a sibling under supervisord and takes a moment to answer. A job
-    # that starts before the socket is up fails its first docker command, so wait
-    # here; a daemon that never comes up fails the container instead of leaving a
-    # runner behind that cannot do its job.
-    for _ in {1..60}; do
-        docker info >/dev/null 2>&1 && break
-        sleep 1
-    done
-    if ! docker info >/dev/null 2>&1; then
-        echo "eci-runner: dockerd is not answering on the default socket after 60s" >&2
-        exit 70
+    if [[ -n "${ECI_RUNNER_IMAGE_CACHE:-}" ]]; then
+        # The daemon is not running yet: the job hook restores the image store
+        # first and starts dockerd itself, so there is nothing to wait for here.
+        echo "eci-runner: image cache ${ECI_RUNNER_IMAGE_CACHE} configured, the job hook starts dockerd"
+    else
+        # dockerd is a sibling under supervisord and takes a moment to answer. A
+        # job that starts before the socket is up fails its first docker command,
+        # so wait here; a daemon that never comes up fails the container instead of
+        # leaving a runner behind that cannot do its job.
+        for _ in {1..60}; do
+            docker info >/dev/null 2>&1 && break
+            sleep 1
+        done
+        if ! docker info >/dev/null 2>&1; then
+            echo "eci-runner: dockerd is not answering on the default socket after 60s" >&2
+            exit 70
+        fi
     fi
 fi
 
