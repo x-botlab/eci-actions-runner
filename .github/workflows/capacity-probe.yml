@@ -1,0 +1,44 @@
+name: capacity-probe
+
+# Temporary: proves the scheduler fills the shortfall in *idle* capacity instead of
+# counting busy container groups as headroom. Deleted once the fix is verified.
+#
+#   mode=hold  4 jobs that occupy pool-small for a few minutes
+#   mode=late  1 job dispatched after the pool is already full of busy instances
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: hold or late
+        type: choice
+        options: [hold, late]
+        default: late
+
+permissions:
+  contents: read
+
+jobs:
+  hold:
+    if: ${{ inputs.mode == 'hold' }}
+    runs-on: [self-hosted, eci-pool-small]
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        slot: [1, 2, 3, 4]
+    steps:
+      - name: Occupy the instance
+        run: |
+          echo "hold ${{ matrix.slot }} started at $(date -u +%H:%M:%S) on $(hostname)"
+          sleep 240
+          echo "hold ${{ matrix.slot }} finished at $(date -u +%H:%M:%S)"
+
+  late:
+    if: ${{ inputs.mode == 'late' }}
+    runs-on: [self-hosted, eci-pool-small]
+    timeout-minutes: 15
+    steps:
+      - name: Report when the job finally starts
+        run: |
+          echo "late started at $(date -u +%H:%M:%S) on $(hostname)"
