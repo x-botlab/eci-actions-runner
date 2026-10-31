@@ -55,6 +55,17 @@ jobs:
           check https://api.github.com
           check https://registry.cn-hangzhou.aliyuncs.com/v2/
 
+      - name: Runtime tool install works
+        # 发布流程会在 job 里现场装 kustomize（镜像保持不动），这里验证同一套
+        # 动作在这个 runner 上可行：下载 GitHub release、解包、sudo 安装。
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.6.0/kustomize_v5.6.0_linux_amd64.tar.gz" \
+            | tar -xz -C /tmp kustomize
+          sudo -n install -m 0755 /tmp/kustomize /usr/local/bin/kustomize
+          kustomize version
+
       - name: Secrets are not visible to the job
         run: |
           if [ -n "${ACTIONS_RUNNER_INPUT_JITCONFIG:-}" ]; then
@@ -71,7 +82,7 @@ jobs:
     #
     # The image needs git (checkout runs inside it) and a shell; the runner injects
     # its own node for JS actions, so node is not a requirement.
-    runs-on: [self-hosted, eci-pool-docker]
+    runs-on: [self-hosted, eci-pool-small]
     timeout-minutes: 15
     container:
       image: node:22-bookworm
@@ -107,7 +118,7 @@ jobs:
     # A job with services needs the daemon before its first step, so this is the
     # case that decides whether the pre-job hook can ever warm the image store: the
     # hook has to run before "Initialize containers".
-    runs-on: [self-hosted, eci-pool-docker]
+    runs-on: [self-hosted, eci-pool-small]
     timeout-minutes: 15
     services:
       postgres:
