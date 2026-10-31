@@ -102,3 +102,43 @@ jobs:
           else
             echo "ok: go is absent, this job chose its own image"
           fi
+
+  services:
+    # A job with services needs the daemon before its first step, so this is the
+    # case that decides whether the pre-job hook can ever warm the image store: the
+    # hook has to run before "Initialize containers".
+    runs-on: [self-hosted, eci-pool-docker]
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: smoke
+          POSTGRES_USER: smoke
+          POSTGRES_PASSWORD: smoke
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U smoke -d smoke"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: The service is reachable on the runner's loopback
+        run: |
+          for _ in $(seq 1 30); do
+            if (echo >/dev/tcp/127.0.0.1/5433) 2>/dev/null; then
+              echo "ok: postgres answers on 127.0.0.1:5433"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "postgres never answered on 127.0.0.1:5433" >&2
+          exit 1
+
+      - name: Hook context
+        run: |
+          echo "workflow : $GITHUB_WORKFLOW"
+          echo "job      : $GITHUB_JOB"
+          docker version --format 'daemon {{.Server.Version}}'
+          docker images --format '{{.Repository}}:{{.Tag}}' | head -5

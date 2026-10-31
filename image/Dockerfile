@@ -76,7 +76,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         tar \
         unzip \
         xz-utils \
-        zip; \
+        zip \
+        zstd; \
     rm -rf /var/lib/apt/lists/*; \
     git lfs install --system --skip-repo; \
     groupadd --gid "${RUNNER_GID}" runner; \
@@ -184,10 +185,14 @@ ENV LANG=C.UTF-8 \
     NPM_CONFIG_AUDIT=false \
     ImageOS=ubuntu24 \
     RUNNER_MANUALLY_TRAP_SIG=1 \
+    # Runs before each job, before the runner creates its containers. The script
+    # is inert unless a privileged pool also names an image cache to restore.
+    ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/eci-job-started.sh \
     ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/eci-entrypoint.sh
 COPY --chmod=0755 runner.sh /usr/local/bin/eci-run.sh
+COPY --chmod=0755 job-started.sh /usr/local/bin/eci-job-started.sh
 COPY --chmod=0644 eci-runner.conf /etc/supervisor/eci-runner.conf
 
 USER runner
