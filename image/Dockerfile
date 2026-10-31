@@ -72,7 +72,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3-venv \
         rsync \
         sudo \
-        supervisor \
         tar \
         unzip \
         xz-utils \
@@ -185,12 +184,14 @@ ENV LANG=C.UTF-8 \
     NPM_CONFIG_AUDIT=false \
     ImageOS=ubuntu24 \
     RUNNER_MANUALLY_TRAP_SIG=1 \
+    # Starts dockerd in a privileged pool before the runner creates the job's
+    # containers; inert everywhere else.
+    ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/eci-job-started.sh \
     ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1
 
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/eci-entrypoint.sh
 COPY --chmod=0755 runner.sh /usr/local/bin/eci-run.sh
-COPY --chmod=0644 eci-runner.conf /etc/supervisor/eci-runner.conf
+COPY --chmod=0755 job-started.sh /usr/local/bin/eci-job-started.sh
 
 USER runner
 WORKDIR /home/runner
-ENTRYPOINT ["/usr/local/bin/eci-entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/eci-run.sh"]

@@ -205,9 +205,16 @@ so a step calls `docker` without `sudo`.
 Why not a sidecar: a container group is only terminal when every container in it
 has exited, and only a terminal group is deleted. A daemon in a second container
 never exits, so the group would look `Running` for the rest of its `ttl_minutes`
-— an eight-minute job would hold an instance for six hours. `supervisord` keeps
-the daemon and the runner in one container and stops supervisord the moment the
-runner exits, so deletion stays immediate and the TTL stays a backstop.
+— an eight-minute job would hold an instance for six hours. The daemon therefore
+runs inside the runner container, started by the job hook
+([image/job-started.sh](image/job-started.sh)) just before the job's containers
+are created.
+
+That hook is the whole lifecycle: the runner is the container's only process, so
+the group ends when the job does, and no supervisor sits between the runner and
+the scheduler. A job that fails makes the container exit non-zero, which the
+scheduler sees; the hook itself never fails a job — if the daemon does not come
+up, the job's own `docker` commands report the real error.
 
 A privileged pool also gets an EmptyDir volume at `/var/lib/docker`, because the
 daemon cannot store images on ECI's own filesystem: the container root is
@@ -215,8 +222,8 @@ overlayfs, overlayfs cannot stack on itself, and every nested container dies wit
 `failed to mount … overlay … invalid argument`. The EmptyDir is ext3 on the
 instance's ephemeral disk, where it works. Verified on ECI in cn-hongkong on an
 8 vCPU / 16 GiB instance with a real privileged pool: `docker run --rm alpine:3`
-and `docker build` with a `RUN` step both succeed, `dockerd` and the runner both
-under `supervisord`, and the socket is `root:runner` so a step calls `docker`
+and `docker build` with a `RUN` step both succeed, `dockerd` runs alongside the
+runner in one container, and the socket is `root:runner` so a step calls `docker`
 without `sudo`. ECI's cgroup v1 layout is writable and needs no fix.
 
 Three consequences worth knowing:
@@ -342,8 +349,9 @@ measured layer sizes.
 ## Before pointing a real repository at it
 
 - Image: the container reads its one-shot registration from
-  `ACTIONS_RUNNER_INPUT_JITCONFIG`; [image/entrypoint.sh](image/entrypoint.sh)
-  handles that, and dispatches to supervisord only for a privileged pool.
+  `ACTIONS_RUNNER_INPUT_JITCONFIG`; [image/runner.sh](image/runner.sh) is the
+  container's only process, and a privileged pool additionally starts `dockerd`
+  from the job hook.
 - Registry: pull from the ACR instance in the same region as the target, and use
   its VPC endpoint, otherwise image traffic crosses the internet.
 - Network: NAT gateway for egress, no inbound rules, and a fixed egress IP so the

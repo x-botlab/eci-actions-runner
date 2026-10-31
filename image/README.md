@@ -17,7 +17,7 @@ every megabyte in it is a tool a job here actually calls. Measured layer sizes:
 | Layer | Size |
 | --- | --- |
 | Ubuntu 24.04 | 117 MB |
-| build/py/git toolchain (incl. supervisor, iptables, nftables) | 527 MB |
+| build/py/git toolchain (incl. iptables, nftables) | 527 MB |
 | runner bundle (runner + its .NET runtime + action node runtimes) | 715 MB |
 | Node 24 | 218 MB |
 | Go | 296 MB |
@@ -37,7 +37,6 @@ used together with an ImageCache and, for short jobs, a warm pool.
 | Docker CLI | 29.9.2 |
 | dockerd | 29.9.2, started only for a privileged pool |
 | buildx | 0.38.1 |
-| supervisor | 4.2.5 (`supervisord`, used for the daemon + runner) |
 | plus | git + git-lfs, build-essential, jq, less, rsync, sudo, iptables |
 
 The Docker CLI alone cannot build an image, so the daemon ships too: `dockerd`,
@@ -49,12 +48,16 @@ asks for it.
 The daemon lives in this container rather than in a sidecar because an ECI
 container group is one container and is only deleted once every container in it
 has exited. A sidecar daemon never exits, so the group would stay `Running` until
-its TTL even after the job ended. [entrypoint.sh](entrypoint.sh) therefore hands a
-privileged container to `supervisord`, which runs two programs:
-[dockerd under sudo](eci-runner.conf) and [runner.sh](runner.sh). `runner.sh`
-waits for the daemon, runs `run.sh`, and shuts the supervisor down when the runner
-exits, so the container ends with the job and `dockerd --group runner` leaves a
-socket the job steps can use without `sudo`.
+its TTL even after the job ended.
+
+[runner.sh](runner.sh) is the container's only process — PID 1 — so the group ends
+as soon as the job does, with the runner's exit code. A privileged pool starts its
+daemon from [job-started.sh](job-started.sh), the `ACTIONS_RUNNER_HOOK_JOB_STARTED`
+hook, which runs before the runner creates the job's containers: `dockerd` is
+detached with `setsid` so it outlives the hook, and `--group=runner` leaves a
+socket the job steps can use without `sudo`. There is no supervisor in the image
+for that reason — one less process to keep alive, and nothing masking the exit
+code.
 
 `PIP_BREAK_SYSTEM_PACKAGES=1` is set because Ubuntu 24.04 ships PEP 668 and a job
 that runs `pip install -r requirements.txt` would otherwise fail outside a venv.
@@ -99,12 +102,14 @@ $ make image-build
 $ docker run --rm --privileged -e ECI_RUNNER_PRIVILEGED=1 \
     -v /var/lib/docker actions-runner:dev
 eci-runner: no JIT config in ACTIONS_RUNNER_INPUT_JITCONFIG ...
+$ echo $?
+64
 ```
 
-dockerd answers about two seconds in, the missing JIT config stops the runner, and
-supervisord — and with it the container — stops right after. A privileged container
-therefore ends as `Succeeded` even when the runner failed to start; the failure is
-in the container log, not in the exit code, because supervisord is PID 1.
+The runner is the container's only process, so its exit code is the container's:
+a job that fails makes the container exit non-zero, and the scheduler can tell a
+broken start-up from a finished job. The daemon is not started here at all — only
+the job hook does that, once a job is actually assigned.
 
 `-v /var/lib/docker` is not decoration: without a real filesystem there, a nested
 container fails with `failed to mount … overlay … invalid argument` when the
