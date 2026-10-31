@@ -89,6 +89,10 @@ jobs:
         run: |
           pwd
           test -f go.mod && echo "ok: the checkout is visible inside the container"
+          # The checkout is made by the runner user and this image runs as root, so
+          # git refuses the workspace as "dubious ownership". A CI image should bake
+          # `git config --system --add safe.directory '*'` in; this job does it here.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git log --oneline -1
 
       - name: The runner's toolchain is not in the image
