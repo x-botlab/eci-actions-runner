@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -330,6 +332,27 @@ func TestLaunchRequestPrivilegedStartsTheDaemon(t *testing.T) {
 	if len(container.VolumeMount) != 1 || *container.VolumeMount[0].Name != dindVolumeName ||
 		*container.VolumeMount[0].MountPath != dindDataPath {
 		t.Fatalf("volume mount = %+v", container.VolumeMount)
+	}
+}
+
+// The launch overrides the image's entry point with an absolute path, so the two
+// have to name the same file. When they drift apart every container on the pool
+// dies with a StartError before the runner exists, which looks like a mysterious
+// job failure rather than a configuration mistake.
+func TestRunnerEntrypointMatchesTheImage(t *testing.T) {
+	dockerfile, err := os.ReadFile("../../image/Dockerfile")
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	found := ""
+	for _, line := range strings.Split(string(dockerfile), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "ENTRYPOINT") {
+			found = line
+		}
+	}
+	if !strings.Contains(found, runnerEntrypoint) {
+		t.Fatalf("image/Dockerfile has %q, the launch uses %q", found, runnerEntrypoint)
 	}
 }
 

@@ -231,11 +231,15 @@ func (c *Client) Target() string { return c.cfg.Name }
 
 // Container group layout. The container starts through the image's own entry
 // point, which reads the one-shot JIT config from the environment (so no
-// registration token is ever baked in) and, in a privileged pool, starts the
-// docker daemon before handing over to the runner.
+// registration token is ever baked in). A privileged pool gets its docker daemon
+// from the image's job hook, not from the entry point.
+//
+// The path is spelled out rather than left to the image so that a launch fails
+// loudly when an image does not carry it — a missing entry point is a StartError
+// that never reaches the runner, and every job on the pool fails at once.
 const (
 	runnerContainerName = "runner"
-	runnerEntrypoint    = "/usr/local/bin/eci-entrypoint.sh"
+	runnerEntrypoint    = "/usr/local/bin/eci-run.sh"
 
 	// EnvJITConfig is the variable the actions-runner image reads its one-shot
 	// registration from.
