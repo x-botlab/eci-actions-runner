@@ -52,6 +52,8 @@ func buildClouds(cfg *config.Config) (map[string]eci.Backend, error) {
 			AutoCreateEIP:   target.AutoCreateEIP,
 			EIPBandwidth:    target.EIPBandwidth,
 			EIPISP:          target.EIPISP,
+			OSSBucket:       target.OSSBucket,
+			OSSEndpoint:     target.OSSEndpoint,
 			Registries:      registries,
 		})
 		if err != nil {

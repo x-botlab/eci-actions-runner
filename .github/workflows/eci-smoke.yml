@@ -142,3 +142,12 @@ jobs:
           echo "job      : $GITHUB_JOB"
           docker version --format 'daemon {{.Server.Version}}'
           docker images --format '{{.Repository}}:{{.Tag}}' | head -5
+          # The refresh workflow reads these from its steps, which only works if
+          # the runner hands its own environment down to a step process.
+          echo "cache    : ${ECI_RUNNER_IMAGE_CACHE:-none}"
+          echo "bucket   : ${ECI_OSS_BUCKET:-none} (${ECI_OSS_ENDPOINT:-none}, ${ECI_OSS_REGION:-none})"
+          if [ -z "${ECI_OSS_BUCKET:-}" ]; then
+            echo "no OSS configured for this pool"
+          else
+            eci-oss stat "oss://$ECI_OSS_BUCKET/eci-store/${ECI_RUNNER_IMAGE_CACHE:-docker}/latest"
+          fi

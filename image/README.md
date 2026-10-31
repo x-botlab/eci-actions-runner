@@ -38,7 +38,8 @@ used together with an ImageCache and, for short jobs, a warm pool.
 | dockerd | 29.9.2, started only for a privileged pool |
 | buildx | 0.38.1 |
 | supervisor | 4.2.5 (`supervisord`, used for the daemon + runner) |
-| plus | git + git-lfs, build-essential, jq, less, rsync, sudo, iptables |
+| ossutil | 2.3.0, reached through [oss.sh](oss.sh) as `eci-oss` |
+| plus | git + git-lfs, build-essential, jq, less, rsync, sudo, iptables, zstd |
 
 The Docker CLI alone cannot build an image, so the daemon ships too: `dockerd`,
 `runc`, `docker-proxy` and `docker-init` come from the same static tarball as the
@@ -72,6 +73,32 @@ No environment variable covers it either. So the only way to keep start-up free 
 an update download is to ship the newest runner, which means rebuilding this image
 when GitHub publishes one. `make image-versions` prints the upstream version
 against the pinned one.
+
+## Warming the daemon's image store
+
+A privileged pool can start each job with images already pulled. Two pieces:
+
+- [job-started.sh](job-started.sh), the `ACTIONS_RUNNER_HOOK_JOB_STARTED` hook,
+  runs inside the runner container before the runner creates the job's
+  containers. It stops `dockerd`, replaces `/var/lib/docker` with the archive,
+  and restarts the daemon — the store's metadata only stays consistent if
+  nothing is writing while it is swapped.
+- [oss.sh](oss.sh) (`eci-oss`) puts ossutil behind the container group's instance
+  role: it reads the STS token from the ECI metadata service
+  (`100.100.100.200`) and calls `ossutil` with it. No key pair is in the container
+  spec, and every call mints a fresh token, so a long job cannot run into an
+  expiry.
+
+The archive is streamed, never staged: `eci-oss cat` → `zstd -dc` → `tar -x` into
+`/var/lib/docker`. That is why there is no bucket mount — ossfs needed a
+FlexVolume, a plug-in that failed on a real container group in more than one
+combination, and it is slow for anything but a few large objects.
+
+Sizes and throughput measured in cn-hongkong: 180 MB/s upload, 122 MB/s download
+beyond page cache, so a 2 GB archive restores in ~17 s.
+
+The hook never fails a job: no cache, a missing object, or a broken archive all
+log and leave an empty store, and the job falls back to plain pulls.
 
 ## How the credential reaches the runner
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -330,6 +331,58 @@ func TestLaunchRequestPrivilegedStartsTheDaemon(t *testing.T) {
 	if len(container.VolumeMount) != 1 || *container.VolumeMount[0].Name != dindVolumeName ||
 		*container.VolumeMount[0].MountPath != dindDataPath {
 		t.Fatalf("volume mount = %+v", container.VolumeMount)
+	}
+}
+
+// The job hook restores its archive from OSS with the instance role, so the
+// launch has to hand it the role and the bucket it belongs to. Nothing secret is
+// in the spec: the container mints its own STS token.
+func TestLaunchRequestHandsTheImageCacheItsBucket(t *testing.T) {
+	client := &Client{cfg: Config{
+		RegionID:    "cn-hongkong",
+		RAMRoleName: "eci-oss-cache",
+		OSSBucket:   "zerobit-actions-cache",
+		OSSEndpoint: "oss-cn-hongkong-internal.aliyuncs.com",
+	}}
+	spec := Spec{
+		Name:       "eci-pool-docker-abc",
+		Image:      "docker.io/library/ubuntu:24.04",
+		Env:        map[string]string{EnvJITConfig: "encoded"},
+		Privileged: true,
+		ImageCache: "laravel",
+	}
+
+	request, err := client.launchRequest(spec, "vsw-1")
+	if err != nil {
+		t.Fatalf("launch request: %v", err)
+	}
+	env := map[string]string{}
+	for _, pair := range request.Container[0].EnvironmentVar {
+		env[*pair.Key] = *pair.Value
+	}
+	want := map[string]string{
+		EnvImageCache:  "laravel",
+		EnvOSSRole:     "eci-oss-cache",
+		EnvOSSBucket:   "zerobit-actions-cache",
+		EnvOSSEndpoint: "oss-cn-hongkong-internal.aliyuncs.com",
+		EnvOSSRegion:   "cn-hongkong",
+	}
+	for key, value := range want {
+		if env[key] != value {
+			t.Fatalf("env[%s] = %q, want %q (env %v)", key, env[key], value, env)
+		}
+	}
+
+	// A pool without a cache family must not pay for the metadata lookup.
+	spec.ImageCache = ""
+	request, err = client.launchRequest(spec, "vsw-1")
+	if err != nil {
+		t.Fatalf("launch request: %v", err)
+	}
+	for _, pair := range request.Container[0].EnvironmentVar {
+		if strings.HasPrefix(*pair.Key, "ECI_OSS_") || *pair.Key == EnvImageCache {
+			t.Fatalf("cache variables leak into a pool without a cache: %s", *pair.Key)
+		}
 	}
 }
 

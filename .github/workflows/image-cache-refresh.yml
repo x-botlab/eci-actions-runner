@@ -1,0 +1,131 @@
+name: Image cache refresh
+
+# Fills the OSS image cache that the runner's job hook restores before every job.
+#
+# The archives are keyed by family, not by workflow: the hook runs before the
+# runner creates the job's containers, so it cannot know which job is coming. A
+# family is the set of images one pool shape always pulls, and a refresh is an
+# incremental overwrite: `docker pull` on top of the restored store only fetches
+# the layers that moved, and the new archive replaces the pointer.
+#
+# Run it after bumping a base image in the workflows a family serves, or on the
+# schedule below to keep base images from drifting.
+
+on:
+  workflow_dispatch:
+    inputs:
+      family:
+        description: Which image family to refresh
+        type: choice
+        options:
+          - docker
+          - deploy
+          - all
+        default: docker
+  schedule:
+    # Mondays 02:00 in Hong Kong, when the queue is empty.
+    - cron: "0 18 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-cache-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    # A privileged pool with no image cache of its own: each archive must hold
+    # exactly one family, so the job starts from an empty store. Not spot, because
+    # a reclaim halfway through an upload would leave a truncated archive behind.
+    runs-on: [self-hosted, eci-pool-cache]
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      # One cache pool instance; a second family waits rather than racing for the
+      # same 30 GiB store.
+      max-parallel: 1
+      matrix:
+        family: ${{ inputs.family == 'docker' && fromJSON('["docker"]')
+               || inputs.family == 'deploy' && fromJSON('["deploy"]')
+               || fromJSON('["docker","deploy"]') }}
+    env:
+      CACHE_PREFIX: eci-store
+      FAMILY: ${{ matrix.family }}
+    steps:
+      - name: Show the cache target
+        run: |
+          set -euo pipefail
+          echo "family=$FAMILY bucket=$ECI_OSS_BUCKET"
+          echo "endpoint=$ECI_OSS_ENDPOINT region=$ECI_OSS_REGION"
+          docker version --format '{{.Server.Version}}'
+          eci-oss stat "oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY/latest" || true
+
+      - name: Pull the family's images
+        run: |
+          set -euo pipefail
+          case "$FAMILY" in
+            docker)
+              # Everything pool-docker pulls: the three services the Laravel
+              # suites start, plus the image a `container:` job runs in.
+              images="postgres:18-alpine getmeili/meilisearch:v1.53.2 redis:8-alpine
+                      node:22-bookworm"
+              ;;
+            deploy)
+              images="node:22-bookworm-slim php:8.3.36-cli-bookworm php:8.3.36-fpm-bookworm
+                      php:8.3.36-apache-bookworm golang:1.25.7-bookworm
+                      gcr.io/distroless/static-debian12:nonroot"
+              ;;
+            *)
+              echo "unknown family: $FAMILY" >&2
+              exit 1
+              ;;
+          esac
+          echo "$images" | tr -s ' \n' '\n' | sed '/^$/d' > /tmp/images.txt
+          cat /tmp/images.txt
+          while read -r image; do docker pull "$image"; done < /tmp/images.txt
+          docker system df
+
+      - name: Stop the daemon
+        # The store's metadata has to be quiescent before it is archived, or the
+        # snapshot directories and the database disagree on restore.
+        run: |
+          set -euo pipefail
+          sudo -n pkill -TERM -x dockerd || true
+          for _ in $(seq 1 30); do
+            docker info >/dev/null 2>&1 || break
+            sleep 1
+          done
+
+      - name: Archive the store
+        run: |
+          set -euo pipefail
+          sudo -n tar --xattrs --xattrs-include='*' --acls --numeric-owner \
+            -C /var/lib/docker -cf - . | zstd -3 -T0 -q -o /tmp/store.tar.zst
+          ls -lh /tmp/store.tar.zst
+          sudo -n du -sh /var/lib/docker
+
+      - name: Upload the archive
+        run: |
+          set -euo pipefail
+          # The name is a hash of the image list: an unchanged family reuses the
+          # same key, a changed one gets a new object instead of overwriting what
+          # a running job may still be reading.
+          hash=$(sha256sum /tmp/images.txt | cut -c1-16)
+          remote="oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY"
+          eci-oss cp /tmp/store.tar.zst "$remote/$hash.tar.zst"
+          echo "$hash" > /tmp/latest
+          eci-oss cp /tmp/latest "$remote/latest"
+          eci-oss stat "$remote/$hash.tar.zst" | sed -n '1,12p'
+
+      - name: Prune old archives
+        # Only objects older than the retention window are candidates, so the
+        # archive just uploaded and its `latest` pointer can never be removed.
+        run: |
+          set -euo pipefail
+          eci-oss rm "oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY/" -r -f --max-age 30d || true
+          eci-oss ls "oss://$ECI_OSS_BUCKET/$CACHE_PREFIX/$FAMILY/"
+
+      - name: Clean up
+        if: always()
+        run: rm -f /tmp/store.tar.zst /tmp/latest /tmp/images.txt

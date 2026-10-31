@@ -25,6 +25,8 @@ ARG GO_BASE_URL=https://go.dev/dl
 ARG DOCKER_VERSION=29.9.2
 ARG DOCKER_BASE_URL=https://download.docker.com/linux/static/stable/x86_64
 ARG BUILDX_VERSION=v0.38.1
+ARG OSSUTIL_VERSION=2.3.0
+ARG OSSUTIL_BASE_URL=https://gosspublic.alicdn.com/ossutil/v2
 
 # Matches the official image's runner uid/gid convention.
 ARG RUNNER_UID=1001
@@ -173,6 +175,23 @@ RUN --mount=type=cache,target=/tmp/dl \
     git config --system --add safe.directory '*'; \
     docker --version; docker buildx version; dockerd --version
 
+# ossutil is how the job hook reaches the image cache bucket. The alternative,
+# mounting the bucket as a volume, needs a FlexVolume and an ossfs mount that our
+# probes showed to be fragile; a plain HTTPS client with the instance role's STS
+# token is one static binary and no mount at all.
+RUN --mount=type=cache,target=/tmp/dl \
+    set -eux; \
+    archive="ossutil-${OSSUTIL_VERSION}-linux-amd64.zip"; \
+    if [ ! -f "/tmp/dl/${archive}" ]; then \
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
+            "${OSSUTIL_BASE_URL}/${OSSUTIL_VERSION}/${archive}" -o "/tmp/dl/${archive}.part"; \
+        mv "/tmp/dl/${archive}.part" "/tmp/dl/${archive}"; \
+    fi; \
+    unzip -p "/tmp/dl/${archive}" "ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" \
+        > /usr/local/bin/ossutil; \
+    chmod 0755 /usr/local/bin/ossutil; \
+    ossutil version
+
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     GOPATH=/home/runner/go \
@@ -193,6 +212,7 @@ ENV LANG=C.UTF-8 \
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/eci-entrypoint.sh
 COPY --chmod=0755 runner.sh /usr/local/bin/eci-run.sh
 COPY --chmod=0755 job-started.sh /usr/local/bin/eci-job-started.sh
+COPY --chmod=0755 oss.sh /usr/local/bin/eci-oss
 COPY --chmod=0644 eci-runner.conf /etc/supervisor/eci-runner.conf
 
 USER runner

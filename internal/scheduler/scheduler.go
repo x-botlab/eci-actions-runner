@@ -457,6 +457,7 @@ func SpecFor(binding config.Binding, name, jitConfig string) eci.Spec {
 		// Privileged is a property of the pool, not of the target: the daemon it
 		// starts lives in the same container group in every region.
 		Privileged: binding.Pool.Privileged,
+		ImageCache: binding.Pool.ImageCache,
 	}
 }
 
