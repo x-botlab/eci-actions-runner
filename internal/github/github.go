@@ -317,6 +317,13 @@ func (c *AppClient) QueuedJobs(ctx context.Context, repo Repo) ([]Job, error) {
 				if job.GetStatus() != "queued" {
 					continue
 				}
+				// A job that already names a runner has been placed; GitHub only
+				// flips its status to in_progress when the runner starts it, which
+				// can be a minute later for a cold container. Counting it as demand
+				// would launch a second instance for a job that already has one.
+				if job.GetRunnerName() != "" {
+					continue
+				}
 				// Overlapping pages or a retried call must not count a job twice:
 				// the count drives how many runners are created.
 				if _, dup := seen[job.GetID()]; dup {

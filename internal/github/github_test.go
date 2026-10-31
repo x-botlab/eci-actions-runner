@@ -127,9 +127,11 @@ func newAPIStub(t *testing.T) (*apiStub, *AppClient) {
 		}
 	})
 	mux.HandleFunc("/repos/o/r/actions/runs/11/jobs", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(t, w, `{"total_count":1,"jobs":[
+		writeJSON(t, w, `{"total_count":2,"jobs":[
 			{"id":100,"run_id":11,"status":"queued","labels":["self-hosted","eci-pool-short"],
-			 "created_at":"2026-01-01T00:00:00Z"}]}`)
+			 "created_at":"2026-01-01T00:00:00Z"},
+			{"id":102,"run_id":11,"status":"queued","labels":["self-hosted","eci-pool-short"],
+			 "runner_name":"eci-pool-short-placed","created_at":"2026-01-01T00:00:00Z"}]}`)
 	})
 	mux.HandleFunc("/repos/o/r/actions/runs/12/jobs", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, `{"total_count":1,"jobs":[
@@ -184,7 +186,7 @@ func TestQueuedJobsReturnsOnlyQueuedJobs(t *testing.T) {
 		t.Fatalf("queued jobs: %v", err)
 	}
 	if len(jobs) != 1 {
-		t.Fatalf("got %d jobs, want 1: in_progress jobs must be skipped", len(jobs))
+		t.Fatalf("got %d jobs, want 1: only a queued job without a runner is demand", len(jobs))
 	}
 	if jobs[0].ID != 100 || jobs[0].RunID != 11 {
 		t.Fatalf("job = %+v", jobs[0])
