@@ -61,14 +61,34 @@ because it fails in every region and retrying just burns quota.
 read the queue per repo          GitHub is the source of truth for demand
 match jobs against each pool     runs-on is an AND over labels
 read container groups            ECI is the source of truth for inventory
+read the runner registry         GitHub knows which of them are idle
 delete what can never run again  only terminal, stuck-pending or expired states
-create the difference            clamp(queued + warm, min, max), budgeted per pass
+create the shortfall             clamp(queued + warm, min, max) over *usable* capacity
 ```
+
+Capacity is not a count of machines. A container group in the `Running` state can
+be idle, busy with a job, or already finished — its runner unregisters itself
+before the group is collected — and only the first can start a queued job. The two
+sides are joined by name, which one launch gives both of them:
+
+| container group | runner registry | bucket |
+| --- | --- | --- |
+| `Pending` / `Scheduling` | (registered already, not connected) | starting |
+| `Running` | `online`, not busy | **idle** |
+| `Running` | `online`, busy | occupied |
+| `Running` | missing | exiting |
+| (not listed yet) | — | starting |
+
+The plan is therefore `queued + warm` minus `idle + starting`, and `max` caps the
+total of all four buckets, because an occupied instance costs the same as an idle
+one. Counting running groups instead made a full pool look big enough: a deploy
+once waited 5m22s behind four unrelated test jobs on the same pool.
 
 Two rules keep this safe:
 
-- **Never launch on partial information.** If a target's describe call fails, the
-  binding is skipped for that pass instead of risking a doubled pool.
+- **Never launch on partial information.** If a target's describe call or the
+  runner listing fails, the binding is skipped for that pass instead of risking a
+  doubled pool.
 - **Never kill a healthy job.** A container group is only deleted when it cannot
   run again; the TTL is enforced by the platform through `ActiveDeadlineSeconds`,
   not by age-based cleanup. Long jobs survive arbitrarily long.

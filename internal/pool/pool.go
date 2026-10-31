@@ -97,12 +97,45 @@ func (s Spec) ImageFor(target string) string {
 	return s.Image
 }
 
-// Desired returns how many instances the pool should hold for a queue depth.
-func (s Spec) Desired(queued int) int {
+// Capacity is what a pool already has, split by whether an instance can still
+// take a job. Counting container groups would not answer that: the Running state
+// covers an idle runner, a busy one, and a group whose runner has already
+// unregistered, and only the first can start a job right now.
+type Capacity struct {
+	// Idle instances are registered, online and not busy: a job assigned now
+	// starts immediately.
+	Idle int
+	// Starting instances cannot take a job yet but will shortly: a container
+	// group that has not reached Running, a runner that is registered but has not
+	// connected, or a launch the platform has not listed.
+	Starting int
+	// Occupied instances are running a job and will not accept another.
+	Occupied int
+	// Exiting instances still exist but their runner is already gone, so the
+	// group is only waiting to be collected.
+	Exiting int
+}
+
+// Total is how many instances exist or are on their way. Max caps this, not the
+// idle count: an occupied instance costs exactly as much as an idle one.
+func (c Capacity) Total() int { return c.Idle + c.Starting + c.Occupied + c.Exiting }
+
+// Plan returns how many container groups to create now.
+//
+// The target is a number of instances that can take work, so an occupied or
+// exiting group never counts towards it. Otherwise a pool that is full of running
+// jobs would decide it has enough machines and leave the next job queued until an
+// unrelated job happens to finish.
+func (s Spec) Plan(queued int, have Capacity) int {
 	if queued < 0 {
 		queued = 0
 	}
-	return min(max(queued+s.Warm, s.Min), s.Max)
+	need := max(queued+s.Warm, s.Min)
+	usable := have.Idle + have.Starting
+	if need <= usable {
+		return 0
+	}
+	return max(0, min(need-usable, s.Max-have.Total()))
 }
 
 // Matches reports whether a job asking for jobLabels can run in this pool.

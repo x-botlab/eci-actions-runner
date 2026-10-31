@@ -265,33 +265,29 @@ func (s *Scheduler) reconcileBinding(ctx context.Context, binding config.Binding
 	}
 	s.observeMetrics(repo, spec.Name, observed)
 
-	// Clean up first, and only while the observed state is trustworthy.
+	// Clean up first, and only while the observed state is trustworthy. The
+	// runner registry is needed for both the cleanup and the capacity below, so it
+	// is fetched once: two snapshots could disagree.
+	runners, err := s.deps.Forge.Runners(ctx, binding.Repo, RunnerNamePrefix(binding.Pool.Name))
+	if err != nil {
+		// Same reasoning as the describe above: without knowing which runners are
+		// idle, a launch decision is a guess, and a wrong guess costs money.
+		return fmt.Errorf("runners for %s: %w", repo, err)
+	}
 	if err := s.terminateDead(ctx, binding, observed); err != nil {
 		return err
 	}
-	if err := s.pruneRunners(ctx, binding, observed); err != nil {
+	if err := s.pruneRunners(ctx, binding, observed, runners); err != nil {
 		return err
 	}
 
-	active := 0
-	for _, instance := range observed {
-		if instance.Active() {
-			active++
-		}
-	}
-	// A launch that the platform has not listed yet still occupies a slot.
-	if pending := s.pendingLaunches(repo, spec.Name, observed, time.Now()); pending > 0 {
-		active += pending
-		s.deps.Logger.Debug("counting launches that are not listed yet",
-			"repo", repo, "pool", spec.Name, "pending", pending)
-	}
-
+	have := capacityOf(observed, runners, s.pendingLaunches(repo, spec.Name, observed, time.Now()))
 	s.deps.Logger.Debug("observed",
 		"repo", repo, "pool", spec.Name,
-		"waiting", waiting, "active", active, "desired", spec.Desired(waiting))
+		"waiting", waiting, "idle", have.Idle, "starting", have.Starting,
+		"occupied", have.Occupied, "exiting", have.Exiting, "plan", spec.Plan(waiting, have))
 
-	desired := spec.Desired(waiting)
-	for active < desired {
+	for launch := spec.Plan(waiting, have); launch > 0; launch-- {
 		if pass.launched >= s.deps.MaxLaunches {
 			s.deps.Logger.Warn("launch budget exhausted for this pass",
 				"repo", repo, "pool", spec.Name, "budget", s.deps.MaxLaunches)
@@ -301,7 +297,6 @@ func (s *Scheduler) reconcileBinding(ctx context.Context, binding config.Binding
 			return err
 		}
 		pass.launched++
-		active++
 	}
 	return nil
 }
@@ -402,11 +397,57 @@ func (s *Scheduler) terminateDead(ctx context.Context, binding config.Binding, i
 	return nil
 }
 
+// capacityOf classifies what the pool has. The container groups and the runner
+// registry are joined by name, which is the same value by construction: one
+// launch names both its JIT runner and its container group (see runnerName).
+//
+// The two sides do not share a lifetime. A runner is registered before its
+// container exists and unregisters itself before its container is deleted, so a
+// registry entry and a group can each exist alone:
+//
+//   - a registered runner with no group is a launch the platform has not listed
+//     yet (already counted by pending) or a leak that pruneRunners just removed;
+//   - a group with no registered runner cannot take a job any more.
+func capacityOf(observed []eci.Instance, runners []github.Runner, pending int) pool.Capacity {
+	byName := make(map[string]github.Runner, len(runners))
+	for _, runner := range runners {
+		byName[runner.Name] = runner
+	}
+
+	// A launch the platform has not listed is on its way, so it counts as
+	// starting rather than as nothing.
+	have := pool.Capacity{Starting: pending}
+	for _, instance := range observed {
+		if !instance.Active() {
+			continue
+		}
+		if instance.Status != "Running" {
+			// Pending, Scheduling, Restarting: the container is not up yet.
+			have.Starting++
+			continue
+		}
+		runner, registered := byName[instance.Name]
+		switch {
+		case !registered:
+			have.Exiting++
+		case runner.Busy:
+			have.Occupied++
+		case runner.Status == "online":
+			have.Idle++
+		default:
+			// Registered but not connected yet: the container is running, the
+			// listener is still starting up, and GitHub will not assign a job.
+			have.Starting++
+		}
+	}
+	return have
+}
+
 // pruneRunners removes runners that registered from a JIT config but never came
 // online, which is what a container group that failed to start leaves behind.
 // It is skipped while anything is still starting, because a starting runner is
 // briefly offline and must not be unregistered.
-func (s *Scheduler) pruneRunners(ctx context.Context, binding config.Binding, instances []eci.Instance) error {
+func (s *Scheduler) pruneRunners(ctx context.Context, binding config.Binding, instances []eci.Instance, runners []github.Runner) error {
 	for _, instance := range instances {
 		if instance.Status == "Pending" || instance.Status == "Scheduling" {
 			return nil
@@ -420,10 +461,6 @@ func (s *Scheduler) pruneRunners(ctx context.Context, binding config.Binding, in
 		}
 	}
 
-	runners, err := s.deps.Forge.Runners(ctx, binding.Repo, RunnerNamePrefix(binding.Pool.Name))
-	if err != nil {
-		return err
-	}
 	for _, runner := range runners {
 		if runner.Status != "offline" || runner.Busy {
 			continue

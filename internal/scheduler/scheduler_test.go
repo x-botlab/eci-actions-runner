@@ -337,7 +337,12 @@ func TestReconcileLaunchesForQueuedJobs(t *testing.T) {
 }
 
 func TestReconcileDoesNothingWhenSatisfied(t *testing.T) {
-	forge := &fakeForge{jobs: []github.Job{queuedJob(1, "eci-pool-short")}}
+	forge := &fakeForge{
+		jobs: []github.Job{queuedJob(1, "eci-pool-short")},
+		// The instance is running and its runner is registered and idle, so the
+		// queued job has somewhere to go.
+		runners: []github.Runner{{ID: 1, Name: "eci-pool-short-1", Status: "online"}},
+	}
 	cloud := &fakeBackend{instances: []eci.Instance{
 		{ID: "i-1", Name: "eci-pool-short-1", Status: "Running", Pool: "pool-short", Repo: "o/r"},
 	}}
@@ -515,11 +520,13 @@ func TestPendingLaunchIsForgottenOnceVisible(t *testing.T) {
 		t.Fatalf("first pass: %v", err)
 	}
 
-	// The platform catches up: the container group now lists as Running.
+	// The platform catches up: the container group now lists as Running and the
+	// runner it was created with is registered and idle.
 	cloud.instances = []eci.Instance{{
 		ID: "i-1", Name: forge.jitNames[0], Status: "Running",
 		Pool: "pool-short", Repo: "o/r", Target: "a", CreatedAt: time.Now(),
 	}}
+	forge.runners = []github.Runner{{ID: 1, Name: forge.jitNames[0], Status: "online"}}
 	if err := s.Reconcile(context.Background()); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
@@ -532,6 +539,127 @@ func TestPendingLaunchIsForgottenOnceVisible(t *testing.T) {
 	s.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("in-flight entries = %d, want 0 after the instance became visible", remaining)
+	}
+}
+
+// Regression: a pool whose instances are all busy used to look "big enough" and
+// the queued job waited for an unrelated job to finish. Observed in production:
+// a deploy waited 5m22s behind four test jobs on the same pool.
+func TestReconcileLaunchesWhenEveryInstanceIsBusy(t *testing.T) {
+	forge := &fakeForge{
+		jobs: []github.Job{queuedJob(1, "eci-pool-short")},
+		runners: []github.Runner{
+			{ID: 1, Name: "eci-pool-short-a", Status: "online", Busy: true},
+			{ID: 2, Name: "eci-pool-short-b", Status: "online", Busy: true},
+			{ID: 3, Name: "eci-pool-short-c", Status: "online", Busy: true},
+		},
+	}
+	cloud := &fakeBackend{instances: []eci.Instance{
+		{ID: "i-a", Name: "eci-pool-short-a", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+		{ID: "i-b", Name: "eci-pool-short-b", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+		{ID: "i-c", Name: "eci-pool-short-c", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+	}}
+	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cloud.launches != 1 {
+		t.Fatalf("launches = %d, want 1: every instance is busy", cloud.launches)
+	}
+}
+
+// A container group whose runner already unregistered is on its way out; a queued
+// job must not wait for it to be collected.
+func TestReconcileLaunchesWhileAnInstanceIsExiting(t *testing.T) {
+	forge := &fakeForge{jobs: []github.Job{queuedJob(1, "eci-pool-short")}}
+	cloud := &fakeBackend{instances: []eci.Instance{
+		{ID: "i-a", Name: "eci-pool-short-a", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+	}}
+	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cloud.launches != 1 {
+		t.Fatalf("launches = %d, want 1: the group has no registered runner", cloud.launches)
+	}
+}
+
+// A registered runner that has not connected yet cannot be given a job, but it is
+// about to be, so it must not trigger a second launch.
+func TestReconcileWaitsForARunnerThatIsStillConnecting(t *testing.T) {
+	forge := &fakeForge{
+		jobs:    []github.Job{queuedJob(1, "eci-pool-short")},
+		runners: []github.Runner{{ID: 1, Name: "eci-pool-short-a", Status: "offline"}},
+	}
+	cloud := &fakeBackend{instances: []eci.Instance{
+		{ID: "i-a", Name: "eci-pool-short-a", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+	}}
+	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 6})
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cloud.launches != 0 {
+		t.Fatalf("launches = %d, want 0 while the runner connects", cloud.launches)
+	}
+}
+
+// Max is a spending cap on instances, not on idle ones: a pool at max stays there
+// even when every instance is busy.
+func TestReconcileNeverExceedsMaxWhenBusy(t *testing.T) {
+	forge := &fakeForge{
+		jobs: []github.Job{
+			queuedJob(1, "eci-pool-short"),
+			queuedJob(2, "eci-pool-short"),
+		},
+		runners: []github.Runner{
+			{ID: 1, Name: "eci-pool-short-a", Status: "online", Busy: true},
+			{ID: 2, Name: "eci-pool-short-b", Status: "online", Busy: true},
+		},
+	}
+	cloud := &fakeBackend{instances: []eci.Instance{
+		{ID: "i-a", Name: "eci-pool-short-a", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+		{ID: "i-b", Name: "eci-pool-short-b", Status: "Running", Pool: "pool-short", Repo: "o/r", Target: "a"},
+	}}
+	s := newReconcileScheduler(t, forge, map[string]*fakeBackend{"a": cloud}, pool.Spec{Max: 2})
+
+	if err := s.Reconcile(context.Background()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if cloud.launches != 0 {
+		t.Fatalf("launches = %d, want 0: the pool is already at max", cloud.launches)
+	}
+}
+
+// The classification is a join between the two sides on the shared name, so each
+// combination of (group state, registry state) needs an answer.
+func TestCapacityOfJoinsGroupsAndRunners(t *testing.T) {
+	observed := []eci.Instance{
+		{Name: "scheduling", Status: "Scheduling"},
+		{Name: "idle", Status: "Running"},
+		{Name: "busy", Status: "Running"},
+		{Name: "connecting", Status: "Running"},
+		{Name: "exiting", Status: "Running"},
+		{Name: "gone", Status: "Succeeded"},
+	}
+	runners := []github.Runner{
+		{Name: "idle", Status: "online"},
+		{Name: "busy", Status: "online", Busy: true},
+		{Name: "connecting", Status: "offline"},
+		{Name: "orphan", Status: "offline"}, // registered, no container group
+	}
+
+	got := capacityOf(observed, runners, 2)
+	want := pool.Capacity{
+		Idle:     1,         // idle
+		Starting: 1 + 1 + 2, // scheduling, connecting, and two pending launches
+		Occupied: 1,         // busy
+		Exiting:  1,         // exiting; the terminal "gone" group is not counted
+	}
+	if got != want {
+		t.Fatalf("capacityOf = %+v, want %+v", got, want)
 	}
 }
 
