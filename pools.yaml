@@ -110,3 +110,23 @@ pools:
     image: registry.cn-beijing.aliyuncs.com/xbotlab/actions-runner:2.338.2-r2
     ttl_minutes: 380
     spot: true
+
+  # A job only gets a docker daemon from a privileged container, so the daemon
+  # runs inside the runner container: an ECI container group is a single
+  # container, and a daemon in a second one would keep the group alive after the
+  # job. The group is also given an EmptyDir at /var/lib/docker, because ECI's
+  # own root filesystem is overlayfs and a nested overlay mount fails on it.
+  # `privileged: true` needs the privileged-container whitelist on the account,
+  # and an image that was built with the daemon (make image-push).
+  - name: pool-docker
+    eci: hangzhou
+    vcpu: 8
+    memory_gib: 16
+    min: 0
+    warm: 0
+    max: 4
+    labels: [eci-pool-docker]
+    image: registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:2.338.2-r2
+    ttl_minutes: 380
+    spot: true
+    privileged: true

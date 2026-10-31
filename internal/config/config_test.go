@@ -85,6 +85,20 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	}
 }
 
+// A privileged pool is the only way a job gets a docker daemon, so the flag has
+// to survive the config round trip.
+func TestLoadAcceptsPrivilegedPool(t *testing.T) {
+	body := strings.Replace(minimal, "    ttl_minutes: 380",
+		"    ttl_minutes: 380\n    privileged: true", 1)
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.Pools[0].Privileged {
+		t.Fatalf("privileged was dropped: %+v", cfg.Pools[0])
+	}
+}
+
 func TestValidateRejectsDuplicateLabel(t *testing.T) {
 	body := minimal + `
   - name: q

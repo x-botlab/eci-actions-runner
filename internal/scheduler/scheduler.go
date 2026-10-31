@@ -440,6 +440,26 @@ func (s *Scheduler) pruneRunners(ctx context.Context, binding config.Binding, in
 	return nil
 }
 
+// SpecFor builds the launch spec for one runner of binding. The reconcile loop
+// and `eci probe` both use it, so a pool property cannot reach one path and miss
+// the other — which is exactly what happened to Privileged when the probe built
+// its own spec.
+func SpecFor(binding config.Binding, name, jitConfig string) eci.Spec {
+	return eci.Spec{
+		Name:      name,
+		Pool:      binding.Pool.Name,
+		Repo:      binding.Repo.String(),
+		VCPU:      binding.Pool.VCPU,
+		MemoryGiB: binding.Pool.MemoryGiB,
+		Env:       map[string]string{eci.EnvJITConfig: jitConfig},
+		TTL:       time.Duration(binding.Pool.TTLMinutes) * time.Minute,
+		Spot:      binding.Pool.Spot,
+		// Privileged is a property of the pool, not of the target: the daemon it
+		// starts lives in the same container group in every region.
+		Privileged: binding.Pool.Privileged,
+	}
+}
+
 // launchOne mints a JIT config and hands it to a new container group. The runner
 // stays unbound to a specific job: it registers as ephemeral and takes whichever
 // matching job arrives first, which is also what makes a warm instance possible.
@@ -451,16 +471,7 @@ func (s *Scheduler) launchOne(ctx context.Context, binding config.Binding, oldes
 		return err
 	}
 
-	spec := eci.Spec{
-		Name:      name,
-		Pool:      binding.Pool.Name,
-		Repo:      binding.Repo.String(),
-		VCPU:      binding.Pool.VCPU,
-		MemoryGiB: binding.Pool.MemoryGiB,
-		Env:       map[string]string{eci.EnvJITConfig: jit.Encoded},
-		TTL:       time.Duration(binding.Pool.TTLMinutes) * time.Minute,
-		Spot:      binding.Pool.Spot,
-	}
+	spec := SpecFor(binding, name, jit.Encoded)
 
 	instanceID, target, err := s.launch(ctx, binding, spec)
 	if err != nil {

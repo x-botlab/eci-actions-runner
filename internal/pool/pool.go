@@ -80,6 +80,13 @@ type Spec struct {
 	Images     map[string]string `yaml:"images" json:"images"`
 	TTLMinutes int               `yaml:"ttl_minutes" json:"ttl_minutes"`
 	Spot       bool              `yaml:"spot" json:"spot"`
+	// Privileged creates the container group privileged and starts a docker
+	// daemon inside the runner container, so a job can run `docker build`. ECI
+	// grants privileged containers only to whitelisted accounts. The daemon
+	// shares the runner's lifecycle on purpose: a second container that never
+	// exits would keep the group Running after the job and delay its deletion
+	// until the TTL.
+	Privileged bool `yaml:"privileged" json:"privileged"`
 }
 
 // ImageFor returns the image to pull in target, falling back to Image.

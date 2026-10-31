@@ -269,6 +269,68 @@ func TestLaunchRequestCarriesRegionAndShape(t *testing.T) {
 	if len(container.EnvironmentVar) != 1 || *container.EnvironmentVar[0].Key != EnvJITConfig {
 		t.Fatalf("env = %+v", container.EnvironmentVar)
 	}
+	// The image only starts dockerd when it is told to, and it is told through
+	// env that must not go to a pool that did not ask for it.
+	if container.SecurityContextPrivileged != nil {
+		t.Fatal("a pool without the daemon must not be privileged")
+	}
+	if len(request.Volume) != 0 || len(container.VolumeMount) != 0 {
+		t.Fatal("a pool without the daemon must not mount a data volume")
+	}
+}
+
+// A privileged pool is the only way a job gets a docker daemon: ECI has no socket
+// to mount, so the image starts dockerd inside the runner container and the
+// launch has to say so in both directions.
+func TestLaunchRequestPrivilegedStartsTheDaemon(t *testing.T) {
+	client := &Client{cfg: Config{RegionID: "cn-hongkong"}}
+	spec := Spec{
+		Name:       "eci-pool-docker-abc",
+		Image:      "docker.io/library/ubuntu:24.04",
+		Env:        map[string]string{EnvJITConfig: "encoded"},
+		Privileged: true,
+	}
+
+	request, err := client.launchRequest(spec, "vsw-1")
+	if err != nil {
+		t.Fatalf("launch request: %v", err)
+	}
+	if len(request.Container) != 1 {
+		t.Fatalf("containers = %d, want the runner only", len(request.Container))
+	}
+	container := request.Container[0]
+	if container.SecurityContextPrivileged == nil || !*container.SecurityContextPrivileged {
+		t.Fatal("expected a privileged container")
+	}
+
+	env := map[string]string{}
+	for _, pair := range container.EnvironmentVar {
+		env[*pair.Key] = *pair.Value
+	}
+	if env[EnvPrivileged] != "1" {
+		t.Fatalf("env = %v, want %s=1", env, EnvPrivileged)
+	}
+	if env[EnvJITConfig] != "encoded" {
+		t.Fatalf("the JIT config must survive the extra env: %v", env)
+	}
+	if _, ok := spec.Env[EnvPrivileged]; ok {
+		t.Fatal("the launch must not mutate the caller's environment")
+	}
+
+	// Without a writable data root of its own, the daemon's overlayfs snapshots
+	// fail on ECI's overlay root filesystem and every nested container dies with
+	// "mount ... invalid argument".
+	if len(request.Volume) != 1 {
+		t.Fatalf("volumes = %d, want the daemon's data volume", len(request.Volume))
+	}
+	volume := request.Volume[0]
+	if *volume.Name != dindVolumeName || *volume.Type != "EmptyDirVolume" || volume.EmptyDirVolume == nil {
+		t.Fatalf("volume = %+v", volume)
+	}
+	if len(container.VolumeMount) != 1 || *container.VolumeMount[0].Name != dindVolumeName ||
+		*container.VolumeMount[0].MountPath != dindDataPath {
+		t.Fatalf("volume mount = %+v", container.VolumeMount)
+	}
 }
 
 func TestRetryableClassification(t *testing.T) {

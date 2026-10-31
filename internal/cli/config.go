@@ -55,11 +55,11 @@ func newPoolCmd(configPath *string) *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "POOL\tECI\tVCPU\tMEM(GiB)\tMIN\tWARM\tMAX\tTTL(m)\tSPOT\tLABELS")
+			fmt.Fprintln(w, "POOL\tECI\tVCPU\tMEM(GiB)\tMIN\tWARM\tMAX\tTTL(m)\tSPOT\tPRIV\tLABELS")
 			for _, p := range cfg.Pools {
-				fmt.Fprintf(w, "%s\t%s\t%g\t%g\t%d\t%d\t%d\t%d\t%t\t%s\n",
+				fmt.Fprintf(w, "%s\t%s\t%g\t%g\t%d\t%d\t%d\t%d\t%t\t%t\t%s\n",
 					p.Name, strings.Join(p.ECI, ">"), p.VCPU, p.MemoryGiB, p.Min, p.Warm, p.Max, p.TTLMinutes, p.Spot,
-					strings.Join(p.Labels, ","))
+					p.Privileged, strings.Join(p.Labels, ","))
 			}
 			return w.Flush()
 		},

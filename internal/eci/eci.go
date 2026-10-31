@@ -90,9 +90,13 @@ type Spec struct {
 	Image     string
 	// Env carries the one-shot JIT config so that no long-lived credential
 	// has to be baked into the runner image.
-	Env  map[string]string
-	TTL  time.Duration
-	Spot bool
+	Env map[string]string
+	// Privileged creates the container privileged and tells the image to start a
+	// docker daemon before the runner. ECI only allows that for whitelisted
+	// accounts.
+	Privileged bool
+	TTL        time.Duration
+	Spot       bool
 }
 
 // Instance is a container group as reported by DescribeContainerGroups.
@@ -225,15 +229,27 @@ func New(cfg Config) (*Client, error) {
 // Target returns the name of the ECI target this client talks to.
 func (c *Client) Target() string { return c.cfg.Name }
 
-// Container group layout. The official actions-runner image reads the one-shot
-// JIT config from the environment, so no registration token is ever baked in.
+// Container group layout. The container starts through the image's own entry
+// point, which reads the one-shot JIT config from the environment (so no
+// registration token is ever baked in) and, in a privileged pool, starts the
+// docker daemon before handing over to the runner.
 const (
 	runnerContainerName = "runner"
-	runnerEntrypoint    = "/home/runner/run.sh"
+	runnerEntrypoint    = "/usr/local/bin/eci-entrypoint.sh"
 
 	// EnvJITConfig is the variable the actions-runner image reads its one-shot
 	// registration from.
 	EnvJITConfig = "ACTIONS_RUNNER_INPUT_JITCONFIG"
+	// EnvPrivileged tells the image that it was created privileged and has to
+	// run a docker daemon.
+	EnvPrivileged = "ECI_RUNNER_PRIVILEGED"
+
+	// The daemon needs a data root that is not the container's own filesystem:
+	// ECI's root is overlayfs and overlayfs cannot stack on itself, so every
+	// nested container fails with "mount ... invalid argument". An EmptyDir is
+	// ext3 (30 GiB on a 8c16g instance), where overlayfs works.
+	dindVolumeName = "docker-data"
+	dindDataPath   = "/var/lib/docker"
 
 	tagManagedBy = "managed-by"
 	tagPool      = "pool"
@@ -329,6 +345,40 @@ func (c *Client) launchRequest(spec Spec, vswitch string) (*eciclient.CreateCont
 		return nil, err
 	}
 
+	env := maps.Clone(spec.Env)
+	if spec.Privileged {
+		if env == nil {
+			env = make(map[string]string, 1)
+		}
+		// The image only runs dockerd when the container was created privileged,
+		// so the flag travels with the launch instead of the image.
+		env[EnvPrivileged] = "1"
+	}
+
+	container := &eciclient.CreateContainerGroupRequestContainer{
+		Name:            tea.String(runnerContainerName),
+		Image:           tea.String(spec.Image),
+		ImagePullPolicy: tea.String("IfNotPresent"),
+		Command:         []*string{tea.String(runnerEntrypoint)},
+		EnvironmentVar:  environment(env),
+	}
+	var volumes []*eciclient.CreateContainerGroupRequestVolume
+	if spec.Privileged {
+		// A privileged container is the only place dockerd can run: ECI offers no
+		// docker socket to mount, and the daemon has to share the container's
+		// lifecycle or the group never reaches a terminal state.
+		container.SecurityContextPrivileged = tea.Bool(true)
+		container.VolumeMount = []*eciclient.CreateContainerGroupRequestContainerVolumeMount{{
+			Name:      tea.String(dindVolumeName),
+			MountPath: tea.String(dindDataPath),
+		}}
+		volumes = append(volumes, &eciclient.CreateContainerGroupRequestVolume{
+			Name:           tea.String(dindVolumeName),
+			Type:           tea.String("EmptyDirVolume"),
+			EmptyDirVolume: &eciclient.CreateContainerGroupRequestVolumeEmptyDirVolume{},
+		})
+	}
+
 	request := &eciclient.CreateContainerGroupRequest{
 		RegionId: tea.String(c.cfg.RegionID),
 		// The client token makes the call idempotent, so a retried launch returns
@@ -341,14 +391,9 @@ func (c *Client) launchRequest(spec Spec, vswitch string) (*eciclient.CreateCont
 		Memory:              tea.Float32(spec.MemoryGiB),
 		RestartPolicy:       tea.String("Never"),
 		AutoMatchImageCache: tea.Bool(true),
-		Container: []*eciclient.CreateContainerGroupRequestContainer{{
-			Name:            tea.String(runnerContainerName),
-			Image:           tea.String(spec.Image),
-			ImagePullPolicy: tea.String("IfNotPresent"),
-			Command:         []*string{tea.String(runnerEntrypoint)},
-			EnvironmentVar:  environment(spec),
-		}},
-		Tag: tags(spec, c.cfg.Name),
+		Container:           []*eciclient.CreateContainerGroupRequestContainer{container},
+		Volume:              volumes,
+		Tag:                 tags(spec, c.cfg.Name),
 	}
 	if c.cfg.RAMRoleName != "" {
 		request.RamRoleName = tea.String(c.cfg.RAMRoleName)
@@ -593,12 +638,12 @@ func clientToken(name string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-func environment(spec Spec) []*eciclient.CreateContainerGroupRequestContainerEnvironmentVar {
-	vars := make([]*eciclient.CreateContainerGroupRequestContainerEnvironmentVar, 0, len(spec.Env))
-	for _, key := range slices.Sorted(maps.Keys(spec.Env)) {
+func environment(env map[string]string) []*eciclient.CreateContainerGroupRequestContainerEnvironmentVar {
+	vars := make([]*eciclient.CreateContainerGroupRequestContainerEnvironmentVar, 0, len(env))
+	for _, key := range slices.Sorted(maps.Keys(env)) {
 		vars = append(vars, &eciclient.CreateContainerGroupRequestContainerEnvironmentVar{
 			Key:   tea.String(key),
-			Value: tea.String(spec.Env[key]),
+			Value: tea.String(env[key]),
 		})
 	}
 	return vars

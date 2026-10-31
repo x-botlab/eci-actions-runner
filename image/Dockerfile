@@ -56,12 +56,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         git \
         git-lfs \
         iproute2 \
+        iptables \
         jq \
         less \
         libffi-dev \
         libicu74 \
         libssl-dev \
         netcat-openbsd \
+        nftables \
         pkg-config \
         procps \
         python3 \
@@ -70,6 +72,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         python3-venv \
         rsync \
         sudo \
+        supervisor \
         tar \
         unzip \
         xz-utils \
@@ -137,7 +140,14 @@ RUN --mount=type=cache,target=/tmp/dl \
     tar -xzf "/tmp/dl/${tarball}" -C /usr/local; \
     /usr/local/go/bin/go version
 
-# Docker CLI and buildx only: the daemon belongs in a sidecar, not in the runner.
+# Docker CLI, buildx and the daemon. The daemon is shipped although most pools
+# never start it: a pool that sets `privileged: true` runs dockerd inside the
+# runner container, because an ECI container group is a single container and a
+# sidecar that never exits would keep the group alive after the job.
+#
+# containerd and ctr stay out on purpose — dockerd 29 uses the embedded
+# containerd, exactly like the official docker:dind image — but the runc shim does
+# not: the runtime spawns containerd-shim-runc-v2 for every container.
 RUN --mount=type=cache,target=/tmp/dl \
     set -eux; \
     tarball="docker-${DOCKER_VERSION}.tgz"; \
@@ -146,7 +156,13 @@ RUN --mount=type=cache,target=/tmp/dl \
             "${DOCKER_BASE_URL}/${tarball}" -o "/tmp/dl/${tarball}.part"; \
         mv "/tmp/dl/${tarball}.part" "/tmp/dl/${tarball}"; \
     fi; \
-    tar -xzf "/tmp/dl/${tarball}" -C /usr/local/bin --strip-components=1 docker/docker; \
+    tar -xzf "/tmp/dl/${tarball}" -C /usr/local/bin --strip-components=1 \
+        docker/docker \
+        docker/dockerd \
+        docker/docker-init \
+        docker/docker-proxy \
+        docker/runc \
+        docker/containerd-shim-runc-v2; \
     mkdir -p /usr/local/lib/docker/cli-plugins; \
     curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 \
         "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" \
@@ -154,7 +170,7 @@ RUN --mount=type=cache,target=/tmp/dl \
     chmod 0755 /usr/local/lib/docker/cli-plugins/docker-buildx; \
     install -d -o runner -g runner /home/runner/go; \
     git config --system --add safe.directory '*'; \
-    docker --version; docker buildx version
+    docker --version; docker buildx version; dockerd --version
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -171,6 +187,8 @@ ENV LANG=C.UTF-8 \
     ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT=1
 
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/eci-entrypoint.sh
+COPY --chmod=0755 runner.sh /usr/local/bin/eci-run.sh
+COPY --chmod=0644 eci-runner.conf /etc/supervisor/eci-runner.conf
 
 USER runner
 WORKDIR /home/runner

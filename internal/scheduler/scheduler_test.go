@@ -100,6 +100,37 @@ func sdkError(code string) error {
 	return &tea.SDKError{Code: tea.String(code)}
 }
 
+// Regression: `eci probe` used to build its own spec, so a privileged pool
+// probed as an unprivileged one and reported success that proved nothing.
+func TestSpecForCarriesThePoolShape(t *testing.T) {
+	binding := config.Binding{
+		Repo: github.Repo{Owner: "o", Name: "r", InstallationID: 7},
+		Pool: pool.Spec{
+			Name:       "pool-docker",
+			VCPU:       8,
+			MemoryGiB:  16,
+			Spot:       true,
+			Privileged: true,
+			TTLMinutes: 380,
+			Labels:     []string{"eci-pool-docker"},
+		},
+	}
+
+	spec := SpecFor(binding, "runner-1", "jit")
+	if !spec.Privileged {
+		t.Fatal("the pool's privileged flag did not reach the launch spec")
+	}
+	if spec.Name != "runner-1" || spec.Pool != "pool-docker" || spec.Repo != "o/r" {
+		t.Fatalf("identity = %+v", spec)
+	}
+	if spec.VCPU != 8 || spec.MemoryGiB != 16 || !spec.Spot || spec.TTL != 380*time.Minute {
+		t.Fatalf("shape = %+v", spec)
+	}
+	if spec.Env[eci.EnvJITConfig] != "jit" {
+		t.Fatalf("env = %v", spec.Env)
+	}
+}
+
 // newTestScheduler builds a scheduler with the given backends and a single
 // binding whose pool lists those targets in order.
 func newTestScheduler(t *testing.T, backends map[string]*fakeBackend, targets []string) (*Scheduler, config.Binding) {

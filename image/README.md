@@ -17,11 +17,11 @@ every megabyte in it is a tool a job here actually calls. Measured layer sizes:
 | Layer | Size |
 | --- | --- |
 | Ubuntu 24.04 | 117 MB |
-| build/py/git toolchain | 518 MB |
+| build/py/git toolchain (incl. supervisor, iptables, nftables) | 527 MB |
 | runner bundle (runner + its .NET runtime + action node runtimes) | 715 MB |
 | Node 24 | 218 MB |
 | Go | 296 MB |
-| Docker CLI + buildx | 113 MB |
+| Docker CLI + buildx + daemon (+ runc shim) | 241 MB |
 
 Pull time is the dominant part of the ECI cold start, so this image is meant to be
 used together with an ImageCache and, for short jobs, a warm pool.
@@ -34,12 +34,27 @@ used together with an ImageCache and, for short jobs, a warm pool.
 | Node | 24.22.2 (LTS, `npm`, `npx`, `corepack`) |
 | Go | 1.27.3 |
 | Python | 3.12.3 (`pip`, `venv`) |
-| Docker CLI | 29.9.2 (no daemon) |
+| Docker CLI | 29.9.2 |
+| dockerd | 29.9.2, started only for a privileged pool |
 | buildx | 0.38.1 |
-| plus | git + git-lfs, build-essential, jq, jq-less, rsync, sudo |
+| supervisor | 4.2.5 (`supervisord`, used for the daemon + runner) |
+| plus | git + git-lfs, build-essential, jq, less, rsync, sudo, iptables |
 
-The Docker *daemon* is deliberately absent: `docker build` needs a daemon, and the
-daemon belongs in a sidecar container in the same container group.
+The Docker CLI alone cannot build an image, so the daemon ships too: `dockerd`,
+`runc`, `docker-proxy` and `docker-init` come from the same static tarball as the
+CLI (`containerd` and `ctr` are left out, dockerd 29 uses the embedded
+containerd). It is not started by default — only a pool with `privileged: true`
+asks for it.
+
+The daemon lives in this container rather than in a sidecar because an ECI
+container group is one container and is only deleted once every container in it
+has exited. A sidecar daemon never exits, so the group would stay `Running` until
+its TTL even after the job ended. [entrypoint.sh](entrypoint.sh) therefore hands a
+privileged container to `supervisord`, which runs two programs:
+[dockerd under sudo](eci-runner.conf) and [runner.sh](runner.sh). `runner.sh`
+waits for the daemon, runs `run.sh`, and shuts the supervisor down when the runner
+exits, so the container ends with the job and `dockerd --group runner` leaves a
+socket the job steps can use without `sudo`.
 
 `PIP_BREAK_SYSTEM_PACKAGES=1` is set because Ubuntu 24.04 ships PEP 668 and a job
 that runs `pip install -r requirements.txt` would otherwise fail outside a venv.
@@ -74,8 +89,28 @@ Two consequences worth keeping:
 - the registration credential never appears in `ps`, because it is not an argument;
 - job steps cannot read it, because the runner already deleted it.
 
-[entrypoint.sh](entrypoint.sh) only guards that path: no JIT config and no
-arguments is a configuration error (exit 64) rather than a container that hangs.
+[runner.sh](runner.sh) only guards that path: no JIT config and no arguments is a
+configuration error (exit 64) rather than a container that hangs.
+
+## Trying the privileged path locally
+
+```
+$ make image-build
+$ docker run --rm --privileged -e ECI_RUNNER_PRIVILEGED=1 \
+    -v /var/lib/docker actions-runner:dev
+eci-runner: no JIT config in ACTIONS_RUNNER_INPUT_JITCONFIG ...
+```
+
+dockerd answers about two seconds in, the missing JIT config stops the runner, and
+supervisord — and with it the container — stops right after. A privileged container
+therefore ends as `Succeeded` even when the runner failed to start; the failure is
+in the container log, not in the exit code, because supervisord is PID 1.
+
+`-v /var/lib/docker` is not decoration: without a real filesystem there, a nested
+container fails with `failed to mount … overlay … invalid argument` when the
+container's own root filesystem is overlayfs, which is the case both under Docker
+Desktop and on ECI. The scheduler mounts an ECI EmptyDir at that path for a
+privileged pool for exactly this reason.
 
 ## Build and push
 

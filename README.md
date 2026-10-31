@@ -181,6 +181,58 @@ setting would silently do nothing. Both were verified against the created
 resource, not just accepted by the API: it reports `ISP=BGP_PRO`,
 `Bandwidth=200`, `InternetChargeType=PayByTraffic`.
 
+## Docker in a job
+
+A job that runs `docker build` needs a daemon, and an ECI container group has no
+socket to mount: it is one container. So the daemon runs inside the runner
+container, started by the image's entry point and supervised next to the runner.
+The pool asks for it with one flag:
+
+```yaml
+pools:
+  - name: pool-docker
+    privileged: true
+    ...
+```
+
+`privileged: true` does two things, both required by ECI: it creates the
+container group privileged — the account has to be on ECI's privileged-container
+whitelist, otherwise `CreateContainerGroup` is refused — and passes
+`ECI_RUNNER_PRIVILEGED=1`, which is how the image knows to start a daemon.
+`dockerd --group runner` makes the socket usable by the uid the job steps run as,
+so a step calls `docker` without `sudo`.
+
+Why not a sidecar: a container group is only terminal when every container in it
+has exited, and only a terminal group is deleted. A daemon in a second container
+never exits, so the group would look `Running` for the rest of its `ttl_minutes`
+— an eight-minute job would hold an instance for six hours. `supervisord` keeps
+the daemon and the runner in one container and stops supervisord the moment the
+runner exits, so deletion stays immediate and the TTL stays a backstop.
+
+A privileged pool also gets an EmptyDir volume at `/var/lib/docker`, because the
+daemon cannot store images on ECI's own filesystem: the container root is
+overlayfs, overlayfs cannot stack on itself, and every nested container dies with
+`failed to mount … overlay … invalid argument`. The EmptyDir is ext3 on the
+instance's ephemeral disk, where it works. Verified on ECI in cn-hongkong on an
+8 vCPU / 16 GiB instance with a real privileged pool: `docker run --rm alpine:3`
+and `docker build` with a `RUN` step both succeed, `dockerd` and the runner both
+under `supervisord`, and the socket is `root:runner` so a step calls `docker`
+without `sudo`. ECI's cgroup v1 layout is writable and needs no fix.
+
+Three consequences worth knowing:
+
+- the steps inherit the privileged container. They already run with passwordless
+  `sudo` inside a per-job container, so this is a drop of isolation inside the
+  sandbox, not between jobs.
+- an image pulled by the job's daemon dies with it: ECI's ImageCache covers the
+  runner image, not what the nested daemon pulls, so those layers are cold in
+  every job. The 30 GiB volume is also the ceiling for a job's image store.
+- cold start grows: the image is ~170 MB larger, and a privileged group pulls it
+  in about 80 s before the runner can register.
+
+The daemon ships in the image, so a privileged pool needs the image rebuilt
+(`make image-push`) before the flag means anything.
+
 ## Verifying a deployment without a workflow
 
 ```console
@@ -291,7 +343,7 @@ measured layer sizes.
 
 - Image: the container reads its one-shot registration from
   `ACTIONS_RUNNER_INPUT_JITCONFIG`; [image/entrypoint.sh](image/entrypoint.sh)
-  handles that and nothing else.
+  handles that, and dispatches to supervisord only for a privileged pool.
 - Registry: pull from the ACR instance in the same region as the target, and use
   its VPC endpoint, otherwise image traffic crosses the internet.
 - Network: NAT gateway for egress, no inbound rules, and a fixed egress IP so the

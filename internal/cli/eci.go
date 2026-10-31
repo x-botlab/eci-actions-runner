@@ -137,16 +137,7 @@ func newECIProbeCmd(configPath *string) *cobra.Command {
 			fmt.Fprintf(out, "jit config      %s for %s (%s in %s)\n",
 				jit.RunnerName, binding.Repo, jitEncodedSummary(jit.Encoded), time.Since(started).Round(time.Millisecond))
 
-			spec := eci.Spec{
-				Name:      name,
-				Pool:      binding.Pool.Name,
-				Repo:      binding.Repo.String(),
-				VCPU:      binding.Pool.VCPU,
-				MemoryGiB: binding.Pool.MemoryGiB,
-				Env:       map[string]string{eci.EnvJITConfig: jit.Encoded},
-				TTL:       time.Duration(binding.Pool.TTLMinutes) * time.Minute,
-				Spot:      binding.Pool.Spot,
-			}
+			spec := scheduler.SpecFor(binding, name, jit.Encoded)
 
 			instanceID, target, err := scheduler.LaunchOne(ctx, clouds, binding, spec, logger, metrics.New())
 			if err != nil {
