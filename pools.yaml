@@ -52,9 +52,11 @@ eci:
       # cross-region in ~16s at 200 Mbit.
       auto_create_eip: true
       eip_bandwidth: 200
-      # BGP_PRO is the premium line. Verified on cn-hongkong: the created EIP
-      # reports ISP=BGP_PRO and Bandwidth=200.
-      eip_isp: BGP_PRO
+      # BGP or BGP_PRO (premium). Verified on cn-hongkong for both: the created
+      # EIP reports the requested ISP and Bandwidth=200, and a container on either
+      # line reaches github.com, api.github.com, the actions broker and both
+      # registries. The deployment uses BGP.
+      eip_isp: BGP
     - name: beijing
       region_id: cn-beijing
       endpoint: eci.cn-beijing.aliyuncs.com
@@ -64,7 +66,7 @@ eci:
       ram_role_name: eci-runner-self-delete
       auto_create_eip: true
       eip_bandwidth: 200
-      eip_isp: BGP_PRO
+      eip_isp: BGP
 
 runner:
   work_folder: _work

@@ -202,13 +202,13 @@ eci:
       security_group_id: sg-xxx
       auto_create_eip: true
       eip_bandwidth: 200   # Mbit/s
-      eip_isp: BGP_PRO     # premium line; BGP is the default
+      eip_isp: BGP         # or BGP_PRO for the premium line
 ```
 
 `eip_bandwidth` and `eip_isp` without `auto_create_eip` are rejected, because the
 setting would silently do nothing. Both were verified against the created
-resource, not just accepted by the API: it reports `ISP=BGP_PRO`,
-`Bandwidth=200`, `InternetChargeType=PayByTraffic`.
+resource, not just accepted by the API: it reports the requested `ISP` (checked for
+`BGP` and `BGP_PRO`), `Bandwidth=200`, `InternetChargeType=PayByTraffic`.
 
 ## Docker in a job
 
