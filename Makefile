@@ -11,6 +11,10 @@ RUNNER_VERSION ?= 2.338.2
 TAG            ?= $(RUNNER_VERSION)
 NODE_VERSION   ?= 24.22.2
 GO_VERSION     ?= 1.27.3
+PHP_VERSIONS   ?= 8.2 8.3 8.4 8.5
+PHP_DEFAULT_VERSION ?= 8.4
+UV_VERSION     ?= 0.13.7
+COMPOSER_VERSION ?= 2.11.1
 PLATFORM       ?= linux/amd64
 APT_MIRROR     ?=
 
@@ -49,6 +53,10 @@ image-build:
 	  --build-arg RUNNER_VERSION=$(RUNNER_VERSION) \
 	  --build-arg NODE_VERSION=$(NODE_VERSION) \
 	  --build-arg GO_VERSION=$(GO_VERSION) \
+	  --build-arg PHP_VERSIONS="$(PHP_VERSIONS)" \
+	  --build-arg PHP_DEFAULT_VERSION=$(PHP_DEFAULT_VERSION) \
+	  --build-arg UV_VERSION=$(UV_VERSION) \
+	  --build-arg COMPOSER_VERSION=$(COMPOSER_VERSION) \
 	  --build-arg APT_MIRROR=$(APT_MIRROR) \
 	  --provenance=false --sbom=false \
 	  -t $(IMAGE):$(TAG) image/

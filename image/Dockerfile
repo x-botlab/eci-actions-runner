@@ -1,15 +1,13 @@
 # syntax=docker/dockerfile:1
 
-# A purpose-built runner image rather than an extension of the official one.
-# The official image is 2.17 GB because it preinstalls toolchains this cluster
-# does not use; building on plain Ubuntu keeps only what a job here actually
-# needs, which directly shortens the ECI cold start.
+# A purpose-built runner image with the toolchains shared by this cluster's jobs.
+# Keep large, specialized SDKs in separate pool images to limit ECI cold starts.
 #
 # The runner version is pinned: a JIT runner cannot disable its own auto-update
 # (verified: `run` rejects --disableupdate with "Unrecognized command-line input
 # arguments for command run: 'disableupdate'"), so the image must always carry the
 # newest release and has to be rebuilt when GitHub publishes one.
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS runner-tools
 
 ARG DEBIAN_FRONTEND=noninteractive
 # Point this at a regional mirror when the default archive is slow, for example
@@ -85,6 +83,74 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     usermod --append --groups sudo runner; \
     echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner; \
     chmod 0440 /etc/sudoers.d/runner
+
+ARG PHP_VERSIONS="8.2 8.3 8.4 8.5"
+ARG PHP_DEFAULT_VERSION=8.4
+ARG UV_VERSION=0.13.7
+ARG COMPOSER_VERSION=2.11.1
+
+# Scope the PHP PPA key to this repository; Ubuntu supplies the other CLI tools.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends gnupg; \
+    curl -fsSL --retry 5 --retry-all-errors \
+        'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xB8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6' \
+        -o /tmp/php-ppa.asc; \
+    gpg --batch --show-keys --with-colons /tmp/php-ppa.asc \
+        | grep -q '^fpr:::::::::B8DC7E53946656EFBCE4C1DD71DAEAAB4AD4CAB6:'; \
+    gpg --batch --dearmor -o /usr/share/keyrings/ondrej-php.gpg /tmp/php-ppa.asc; \
+    rm /tmp/php-ppa.asc; \
+    echo 'deb [signed-by=/usr/share/keyrings/ondrej-php.gpg] https://ppa.launchpadcontent.net/ondrej/php/ubuntu noble main' \
+        > /etc/apt/sources.list.d/ondrej-php.list; \
+    apt-get update; \
+    case " ${PHP_VERSIONS} " in \
+        *" ${PHP_DEFAULT_VERSION} "*) ;; \
+        *) echo 'PHP_DEFAULT_VERSION must be included in PHP_VERSIONS' >&2; exit 1 ;; \
+    esac; \
+    packages='dnsutils file gh openssh-client ripgrep'; \
+    for version in ${PHP_VERSIONS}; do \
+        for extension in cli common dev bcmath bz2 curl gd gmp intl ldap mbstring mysql pgsql readline soap sqlite3 xml zip apcu imagick redis; do \
+            packages="${packages} php${version}-${extension}"; \
+        done; \
+    done; \
+    apt-get install -y --no-install-recommends ${packages}; \
+    for tool in php phpize php-config; do \
+        update-alternatives --set "${tool}" "/usr/bin/${tool}${PHP_DEFAULT_VERSION}"; \
+    done; \
+    for version in ${PHP_VERSIONS}; do \
+        php${version} --version; \
+        php${version} -r 'foreach (["bcmath", "bz2", "curl", "dom", "exif", "fileinfo", "gd", "gmp", "intl", "ldap", "mbstring", "mysqli", "pcntl", "pdo_mysql", "pdo_pgsql", "pdo_sqlite", "soap", "sockets", "xml", "zip", "apcu", "imagick", "redis"] as $ext) { if (!extension_loaded($ext)) { fwrite(STDERR, "Missing PHP extension: $ext\n"); exit(1); } }'; \
+    done; \
+    gh --version; ssh -V; rg --version; file --version; dig -v; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN --mount=type=cache,target=/tmp/dl \
+    set -eux; \
+    tarball=uv-x86_64-unknown-linux-gnu.tar.gz; \
+    base="https://github.com/astral-sh/uv/releases/download/${UV_VERSION}"; \
+    curl -fsSL --retry 5 --retry-all-errors "${base}/${tarball}" -o "/tmp/dl/uv-${UV_VERSION}.tar.gz"; \
+    curl -fsSL --retry 5 --retry-all-errors "${base}/${tarball}.sha256" -o /tmp/uv.sha256; \
+    echo "$(cut -d ' ' -f 1 /tmp/uv.sha256)  /tmp/dl/uv-${UV_VERSION}.tar.gz" | sha256sum -c -; \
+    tar -xzf "/tmp/dl/uv-${UV_VERSION}.tar.gz" -C /usr/local/bin --strip-components=1 \
+        uv-x86_64-unknown-linux-gnu/uv uv-x86_64-unknown-linux-gnu/uvx; \
+    rm /tmp/uv.sha256; \
+    uv --version; uvx --version
+
+RUN --mount=type=cache,target=/tmp/dl \
+    set -eux; \
+    base="https://getcomposer.org/download/${COMPOSER_VERSION}"; \
+    curl -fsSL --retry 5 --retry-all-errors "${base}/composer.phar" -o /tmp/dl/composer.phar; \
+    curl -fsSL --retry 5 --retry-all-errors "${base}/composer.phar.sha256sum" -o /tmp/composer.sha256; \
+    (cd /tmp/dl && sha256sum -c /tmp/composer.sha256); \
+    install -m 0755 /tmp/dl/composer.phar /usr/local/bin/composer; \
+    rm /tmp/composer.sha256; \
+    for version in ${PHP_VERSIONS}; do \
+        php${version} /usr/local/bin/composer --version; \
+    done
+
+FROM runner-tools AS runner
 
 # The runner bundle is self-contained: bin/ holds the listener and its .NET
 # runtime, externals/ the node builds that actions execute with.

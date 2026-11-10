@@ -9,19 +9,11 @@ registry.cn-hangzhou.aliyuncs.com/xbotlab/actions-runner:latest
 
 ## Why build our own base
 
-The official `ghcr.io/actions/actions-runner` image is 2.17 GB on its own because
-it preinstalls toolchains this cluster does not use. Building on plain Ubuntu with
-the official runner bundle drops the result to 2.56 GB — about the same total, but
-every megabyte in it is a tool a job here actually calls. Measured layer sizes:
-
-| Layer | Size |
-| --- | --- |
-| Ubuntu 24.04 | 117 MB |
-| build/py/git toolchain (incl. iptables, nftables) | 527 MB |
-| runner bundle (runner + its .NET runtime + action node runtimes) | 715 MB |
-| Node 24 | 218 MB |
-| Go | 296 MB |
-| Docker CLI + buildx + daemon (+ runc shim) | 241 MB |
+Building on Ubuntu 24.04 lets us choose the shared toolchains explicitly. The
+image includes multiple PHP versions and common CLI tools so jobs do not need to
+install them on every run. Specialized SDKs and browsers belong in separate pool
+images. A local build with the default versions measured approximately 3.16 GB
+uncompressed (`docker image inspect`); compressed registry transfer size differs.
 
 Pull time is the dominant part of the ECI cold start, so this image is meant to be
 used together with an ImageCache and, for short jobs, a warm pool.
@@ -33,11 +25,51 @@ used together with an ImageCache and, for short jobs, a warm pool.
 | Runner | 2.338.2 |
 | Node | 24.22.2 (LTS, `npm`, `npx`, `corepack`) |
 | Go | 1.27.3 |
+| PHP CLI | 8.2, 8.3, 8.4, 8.5; default 8.4 (Ondřej Surý PPA) |
+| Composer | 2.11.1 (official PHAR, checksum verified) |
 | Python | 3.12.3 (`pip`, `venv`) |
+| uv / uvx | 0.13.7 |
+| GitHub CLI | `gh` (APT package) |
+| SSH client | `ssh`, `scp`, `sftp` (APT package) |
+| Diagnostics | ripgrep (`rg`), `file`, dnsutils (`dig`, `nslookup`) |
 | Docker CLI | 29.9.2 |
 | dockerd | 29.9.2, started only for a privileged pool |
 | buildx | 0.38.1 |
 | plus | git + git-lfs, build-essential, jq, less, rsync, sudo, iptables |
+
+### PHP versions and extensions
+
+Each PHP version includes CLI and development tools (`phpize`, `php-config`),
+bcmath, bz2, curl, GD, GMP, intl, LDAP, mbstring, MySQL, PostgreSQL, SQLite,
+readline, SOAP, XML (including DOM, SimpleXML, XMLReader/Writer and XSL), ZIP,
+APCu, Imagick and Redis. Common/built-in modules also provide ctype, exif,
+fileinfo, OpenSSL, pcntl, PDO, sockets and tokenizer. No PHP web server or FPM
+service is installed. Xdebug is left out to avoid overhead in ordinary jobs.
+
+Use explicit binaries to run a matrix without changing system alternatives:
+
+```sh
+php8.2 /usr/local/bin/composer install --no-interaction --prefer-dist
+php8.2 vendor/bin/phpunit
+php8.5 /usr/local/bin/composer check-platform-reqs
+```
+
+To change the default for subsequent job steps, switch all three tools:
+
+```sh
+version=8.3
+for tool in php phpize php-config; do
+  sudo update-alternatives --set "$tool" "/usr/bin/${tool}${version}"
+done
+php --version
+composer --version
+```
+
+The PHP versions use separate configuration directories under `/etc/php/<version>`.
+PHP patch versions and APT tools follow the packages available at build time;
+rebuild to pick up updates. `shivammathur/setup-php` may still access the network
+for its setup scripts, extra extensions or tools; preinstallation does not make
+that action offline. Builds verify the listed extensions on every PHP version.
 
 The Docker CLI alone cannot build an image, so the daemon ships too: `dockerd`,
 `runc`, `docker-proxy` and `docker-init` come from the same static tarball as the
@@ -125,7 +157,19 @@ $ make image-push TAG=2.338.2           # build, tag latest, push both
 ```
 
 Overrides: `REGISTRY`, `IMAGE`, `TAG`, `RUNNER_VERSION`, `NODE_VERSION`,
-`GO_VERSION`, `APT_MIRROR`, `PLATFORM`.
+`GO_VERSION`, `PHP_VERSIONS`, `PHP_DEFAULT_VERSION`, `COMPOSER_VERSION`,
+`UV_VERSION`, `APT_MIRROR`, `PLATFORM`. `PHP_DEFAULT_VERSION` must be included in `PHP_VERSIONS`:
+
+```sh
+make image-build PHP_VERSIONS="8.3 8.4 8.5" PHP_DEFAULT_VERSION=8.4
+```
+
+To validate only the PHP and utility layers without downloading the runner,
+Node, Go or Docker bundles:
+
+```sh
+docker build --target runner-tools -f image/Dockerfile -t actions-runner:tools image/
+```
 
 On a network where `ghcr.io` or the default Ubuntu archive is slow, use a mirror:
 

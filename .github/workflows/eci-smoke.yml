@@ -38,6 +38,35 @@ jobs:
           docker --version
           docker buildx version
           git --version
+          composer --version
+          uv --version
+          uvx --version
+          gh --version
+          ssh -V
+          rg --version
+          file --version
+          dig -v
+
+      - name: PHP versions and extensions
+        run: |
+          set -euo pipefail
+          test "$(php -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')" = 8.4
+          for version in 8.2 8.3 8.4 8.5; do
+            php${version} --version
+            php${version} /usr/local/bin/composer --version
+            php${version} -r '
+              foreach (["bcmath", "bz2", "curl", "dom", "exif", "fileinfo", "gd", "gmp", "intl", "ldap", "mbstring", "mysqli", "pcntl", "pdo_mysql", "pdo_pgsql", "pdo_sqlite", "soap", "sockets", "xml", "zip", "apcu", "imagick", "redis"] as $ext) {
+                if (!extension_loaded($ext)) {
+                  fwrite(STDERR, "Missing PHP extension: $ext\n");
+                  exit(1);
+                }
+              }
+              $db = new PDO("sqlite::memory:");
+              if ((int) $db->query("SELECT 42")->fetchColumn() !== 42) {
+                exit(1);
+              }
+            '
+          done
 
       - name: Egress
         run: |
